@@ -23,12 +23,20 @@ import {
   problems,
   regularizations,
   getKeyFromValue,
-  Problem
+  Problem,
+  RegressionDatasetKind
 } from "./state";
-import {Example2D, shuffle} from "./dataset";
+import {
+  Example2D,
+  RandomWalkRegion,
+  randomWalkRegressionData,
+  shuffle
+} from "./dataset";
 import {AppendingLineChart} from "./linechart";
 import * as d3 from 'd3';
 
+declare var require: any;
+let THREE: any = require("three");
 let mainWidth;
 
 // More scrolling
@@ -72,6 +80,8 @@ let INPUTS: {[name: string]: InputFeature} = {
   "sinY": {f: (x, y) => Math.sin(y), label: "sin(X_2)"},
 };
 
+let inputLabels: {[name: string]: string} = {};
+
 let HIDABLE_CONTROLS = [
   ["Show test data", "showTestData"],
   ["Discretize output", "discretize"],
@@ -86,6 +96,11 @@ let HIDABLE_CONTROLS = [
   ["Which dataset", "dataset"],
   ["Ratio train data", "percTrainData"],
   ["Noise level", "noise"],
+  ["Random walk dimension", "dimensionN"],
+  ["Random walk length", "walkLengthK"],
+  ["Sample multiplier", "sampleMultiplierM"],
+  ["Gaussian noise controls", "noiseGaussian"],
+  ["Architecture frontend", "architectureFrontend"],
   ["Batch size", "batchSize"],
   ["# of hidden layers", "numHiddenLayers"],
 ];
@@ -142,6 +157,9 @@ class Player {
 }
 
 let state = State.deserializeState();
+if (state.useTransformer && state.useCnnFrontend) {
+  state.useCnnFrontend = false;
+}
 
 // Filter out inputs that are hidden.
 state.getHiddenProps().forEach(prop => {
@@ -157,6 +175,7 @@ let xDomain: [number, number] = [-6, 6];
 let heatMap =
     new HeatMap(300, DENSITY, xDomain, xDomain, d3.select("#heatmap"),
         {showAxes: true});
+d3.select("#heatmap").select("div:last-child").classed("heatmap-2d", true);
 let linkWidthScale = d3.scale.linear()
   .domain([0, 5])
   .range([1, 10])
@@ -168,12 +187,63 @@ let colorScale = d3.scale.linear<string, number>()
 let iter = 0;
 let trainData: Example2D[] = [];
 let testData: Example2D[] = [];
+let randomWalkRegions: RandomWalkRegion[] = [];
+let randomWalkPath: number[][] = [];
 let network: nn.Node[][] = null;
 let lossTrain = 0;
 let lossTest = 0;
 let player = new Player();
 let lineChart = new AppendingLineChart(d3.select("#linechart"),
     ["#777", "black"]);
+interface ProjectionViewState {
+  scene: any;
+  camera: any;
+  renderer: any;
+  root: any;
+  points: any;
+  dynamicObjects: any[];
+  webglFailed: boolean;
+}
+interface ProjectionPayload {
+  positions: number[];
+  colors: number[];
+  mode: string;
+  range: number;
+}
+interface Heatmap3DPayload {
+  truthLinePositions: number[];
+  truthLineColors: number[];
+  modelLinePositions: number[];
+  modelLineColors: number[];
+  mode: string;
+  axes: string;
+  range: number;
+  lineScale: number;
+}
+let projectionViews: {[name: string]: ProjectionViewState} = {};
+
+function usingRandomWalk(): boolean {
+  return state.problem === Problem.REGRESSION &&
+      state.regressionDatasetKind === RegressionDatasetKind.RANDOM_WALK;
+}
+
+function getOutputDimension(): number {
+  return usingRandomWalk() ? Math.max(1, Math.floor(state.dimensionN)) : 1;
+}
+
+function getFrontendOutputSize(rawInputSize: number): number {
+  if (state.useTransformer) {
+    return 16;
+  }
+  if (state.useCnnFrontend) {
+    return 8;
+  }
+  return rawInputSize;
+}
+
+function getTarget(point: Example2D): number | number[] {
+  return point.labelVec != null ? point.labelVec : point.label;
+}
 
 function makeGUI() {
   d3.select("#reset-button").on("click", () => {
@@ -232,7 +302,9 @@ function makeGUI() {
       return; // No-op.
     }
     state.regDataset =  newDataset;
+    state.regressionDatasetKind = RegressionDatasetKind.LEGACY;
     regDataThumbnails.classed("selected", false);
+    d3.select("#random-walk-dataset").classed("selected", false);
     d3.select(this).classed("selected", true);
     generateData();
     parametersChanged = true;
@@ -242,7 +314,21 @@ function makeGUI() {
   let regDatasetKey = getKeyFromValue(regDatasets, state.regDataset);
   // Select the dataset according to the current state.
   d3.select(`canvas[data-regDataset=${regDatasetKey}]`)
-    .classed("selected", true);
+    .classed("selected", state.regressionDatasetKind !==
+        RegressionDatasetKind.RANDOM_WALK);
+
+  d3.select("#random-walk-dataset").on("click", function() {
+    if (state.regressionDatasetKind === RegressionDatasetKind.RANDOM_WALK) {
+      return;
+    }
+    state.regressionDatasetKind = RegressionDatasetKind.RANDOM_WALK;
+    regDataThumbnails.classed("selected", false);
+    d3.select(this).classed("selected", true);
+    generateData();
+    parametersChanged = true;
+    reset();
+  }).classed("selected", state.regressionDatasetKind ===
+      RegressionDatasetKind.RANDOM_WALK);
 
   d3.select("#add-layers").on("click", () => {
     if (state.numHiddenLayers >= 6) {
@@ -311,6 +397,138 @@ function makeGUI() {
   }
   noise.property("value", state.noise);
   d3.select("label[for='noise'] .value").text(state.noise);
+
+  let dimensionN = d3.select("#dimensionN").on("input", function() {
+    state.dimensionN = Math.max(1, Math.min(8, +this.value));
+    d3.select("label[for='dimensionN'] .value").text(state.dimensionN);
+    generateData(true);
+    parametersChanged = true;
+    reset();
+  });
+  dimensionN.property("value", state.dimensionN);
+  d3.select("label[for='dimensionN'] .value").text(state.dimensionN);
+
+  let walkLengthK = d3.select("#walkLengthK").on("input", function() {
+    state.walkLengthK = Math.max(1, Math.floor(+this.value));
+    d3.select("label[for='walkLengthK'] .value").text(state.walkLengthK);
+    generateData(true);
+    parametersChanged = true;
+    reset();
+  });
+  walkLengthK.property("value", state.walkLengthK);
+  d3.select("label[for='walkLengthK'] .value").text(state.walkLengthK);
+
+  let sampleMultiplierM = d3.select("#sampleMultiplierM").on("input",
+      function() {
+    state.sampleMultiplierM = Math.max(1, Math.floor(+this.value));
+    d3.select("label[for='sampleMultiplierM'] .value")
+        .text(state.sampleMultiplierM);
+    generateData(true);
+    parametersChanged = true;
+    reset();
+  });
+  sampleMultiplierM.property("value", state.sampleMultiplierM);
+  d3.select("label[for='sampleMultiplierM'] .value")
+      .text(state.sampleMultiplierM);
+
+  let seedInput = d3.select("#seed").on("change", function() {
+    if (this.value != null && this.value !== "") {
+      state.seed = this.value;
+      generateData(true);
+      parametersChanged = true;
+      reset();
+    }
+  });
+  seedInput.property("value", state.seed);
+
+  let noiseEnabled = d3.select("#noiseEnabled").on("change", function() {
+    state.noiseEnabled = this.checked;
+    generateData(true);
+    parametersChanged = true;
+    reset();
+  });
+  noiseEnabled.property("checked", state.noiseEnabled);
+
+  let noiseMean = d3.select("#noiseMean").on("change", function() {
+    state.noiseMean = +this.value;
+    generateData(true);
+    parametersChanged = true;
+    reset();
+  });
+  noiseMean.property("value", state.noiseMean);
+
+  let noiseVariance = d3.select("#noiseVariance").on("change", function() {
+    state.noiseVariance = Math.max(0, +this.value);
+    generateData(true);
+    parametersChanged = true;
+    reset();
+  });
+  noiseVariance.property("value", state.noiseVariance);
+
+  let useCnnFrontend = d3.select("#useCnnFrontend").on("change", function() {
+    state.useCnnFrontend = this.checked;
+    if (state.useCnnFrontend) {
+      state.useTransformer = false;
+      d3.select("#useTransformer").property("checked", false);
+    }
+    parametersChanged = true;
+    reset();
+  });
+  useCnnFrontend.property("checked", state.useCnnFrontend);
+
+  let useTransformer = d3.select("#useTransformer").on("change", function() {
+    state.useTransformer = this.checked;
+    if (state.useTransformer) {
+      state.useCnnFrontend = false;
+      d3.select("#useCnnFrontend").property("checked", false);
+    }
+    parametersChanged = true;
+    reset();
+  });
+  useTransformer.property("checked", state.useTransformer);
+
+  let deadNeuronEps = d3.select("#deadNeuronEps").on("change", function() {
+    state.deadNeuronEps = Math.max(0, +this.value);
+    state.serialize();
+    updateDeadNeuronMonitor();
+  });
+  deadNeuronEps.property("value", state.deadNeuronEps);
+
+  let sweepEpochs = d3.select("#sweepEpochs").on("change", function() {
+    state.sweepEpochs = Math.max(1, Math.floor(+this.value));
+    state.serialize();
+  });
+  sweepEpochs.property("value", state.sweepEpochs);
+
+  d3.select("#sweep-depth-button").on("click", function() {
+    runAutoSweep("depth");
+  });
+  d3.select("#sweep-width-button").on("click", function() {
+    runAutoSweep("width");
+  });
+
+  ["projectionX", "projectionY", "projectionZ"].forEach(prop => {
+    d3.select("#" + prop).on("change", function() {
+      state[prop] = +this.value;
+      state.serialize();
+      drawRandomWalkProjection();
+    });
+  });
+
+  ["projectionRotateX", "projectionRotateY", "projectionRotateZ",
+      "projectionScale", "projectionRange"].forEach(prop => {
+    let control = d3.select("#" + prop).on("input", function() {
+      state[prop] = +this.value;
+      if (prop === "projectionRange") {
+        state.projectionRange = Math.max(0.1, state.projectionRange);
+        d3.select("#projectionRangeValue").text(state.projectionRange);
+      }
+      state.serialize();
+      drawRandomWalkProjection();
+    });
+    control.property("value", state[prop]);
+  });
+  d3.select("#projectionRangeValue").text(state.projectionRange);
 
   let batchSize = d3.select("#batchSize").on("input", function() {
     state.batchSize = this.value;
@@ -442,8 +660,10 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
     });
   let activeOrNotClass = state[nodeId] ? "active" : "inactive";
   if (isInput) {
-    let label = INPUTS[nodeId].label != null ?
-        INPUTS[nodeId].label : nodeId;
+    let inputFeature = INPUTS[nodeId];
+    let label = inputLabels[nodeId] ||
+        (inputFeature != null && inputFeature.label != null ?
+        inputFeature.label : nodeId);
     // Draw the input label.
     let text = nodeGroup.append("text").attr({
       class: "main-label",
@@ -473,7 +693,8 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
     } else {
       text.append("tspan").text(label);
     }
-    nodeGroup.classed(activeOrNotClass, true);
+    nodeGroup.classed(inputFeature == null ? "active" : activeOrNotClass,
+        true);
   }
   if (!isInput) {
     // Draw the node's bias.
@@ -506,27 +727,38 @@ function drawNode(cx: number, cy: number, nodeId: string, isInput: boolean,
       selectedNodeId = nodeId;
       div.classed("hovered", true);
       nodeGroup.classed("hovered", true);
-      updateDecisionBoundary(network, false);
-      heatMap.updateBackground(boundary[nodeId], state.discretize);
+      drawRandomWalkProjection();
+      if (!usingRandomWalk()) {
+        updateDecisionBoundary(network, false);
+        heatMap.updateBackground(boundary[nodeId], state.discretize);
+      }
     })
     .on("mouseleave", function() {
       selectedNodeId = null;
       div.classed("hovered", false);
       nodeGroup.classed("hovered", false);
-      updateDecisionBoundary(network, false);
-      heatMap.updateBackground(boundary[nn.getOutputNode(network).id],
-          state.discretize);
+      drawRandomWalkProjection();
+      if (!usingRandomWalk()) {
+        updateDecisionBoundary(network, false);
+        heatMap.updateBackground(boundary[nn.getOutputNode(network).id],
+            state.discretize);
+      }
     });
   if (isInput) {
     div.on("click", function() {
+      if (!(nodeId in INPUTS)) {
+        return;
+      }
       state[nodeId] = !state[nodeId];
       parametersChanged = true;
       reset();
     });
-    div.style("cursor", "pointer");
+    if (nodeId in INPUTS) {
+      div.style("cursor", "pointer");
+    }
   }
   if (isInput) {
-    div.classed(activeOrNotClass, true);
+    div.classed(nodeId in INPUTS ? activeOrNotClass : "active", true);
   }
   let nodeHeatMap = new HeatMap(RECT_SIZE, DENSITY / 10, xDomain,
       xDomain, div, {noSvg: true});
@@ -571,7 +803,7 @@ function drawNetwork(network: nn.Node[][]): void {
 
   // Draw the input layer separately.
   let cx = RECT_SIZE / 2 + 50;
-  let nodeIds = Object.keys(INPUTS);
+  let nodeIds = network[0].map(node => node.id);
   let maxY = nodeIndexScale(nodeIds.length);
   nodeIds.forEach((nodeId, i) => {
     let cy = nodeIndexScale(i) + RECT_SIZE / 2;
@@ -631,16 +863,19 @@ function drawNetwork(network: nn.Node[][]): void {
     }
   }
 
-  // Draw the output node separately.
+  // Draw the output layer separately.
   cx = width + RECT_SIZE / 2;
-  let node = network[numLayers - 1][0];
-  let cy = nodeIndexScale(0) + RECT_SIZE / 2;
-  node2coord[node.id] = {cx, cy};
-  // Draw links.
-  for (let i = 0; i < node.inputLinks.length; i++) {
-    let link = node.inputLinks[i];
-    drawLink(link, node2coord, network, container, i === 0, i,
-        node.inputLinks.length);
+  let outputLayer = network[numLayers - 1];
+  maxY = Math.max(maxY, nodeIndexScale(outputLayer.length));
+  for (let outputIndex = 0; outputIndex < outputLayer.length; outputIndex++) {
+    let node = outputLayer[outputIndex];
+    let cy = nodeIndexScale(outputIndex) + RECT_SIZE / 2;
+    node2coord[node.id] = {cx, cy};
+    for (let i = 0; i < node.inputLinks.length; i++) {
+      let link = node.inputLinks[i];
+      drawLink(link, node2coord, network, container, i === 0, i,
+          node.inputLinks.length);
+    }
   }
   // Adjust the height of the svg.
   svg.attr("height", maxY);
@@ -799,10 +1034,9 @@ function updateDecisionBoundary(network: nn.Node[][], firstTime: boolean) {
     nn.forEachNode(network, true, node => {
       boundary[node.id] = new Array(DENSITY);
     });
-    // Go through all predefined inputs.
-    for (let nodeId in INPUTS) {
-      boundary[nodeId] = new Array(DENSITY);
-    }
+    network[0].forEach(node => {
+      boundary[node.id] = new Array(DENSITY);
+    });
   }
   let xScale = d3.scale.linear().domain([0, DENSITY - 1]).range(xDomain);
   let yScale = d3.scale.linear().domain([DENSITY - 1, 0]).range(xDomain);
@@ -813,10 +1047,9 @@ function updateDecisionBoundary(network: nn.Node[][], firstTime: boolean) {
       nn.forEachNode(network, true, node => {
         boundary[node.id][i] = new Array(DENSITY);
       });
-      // Go through all predefined inputs.
-      for (let nodeId in INPUTS) {
-        boundary[nodeId][i] = new Array(DENSITY);
-      }
+      network[0].forEach(node => {
+        boundary[node.id][i] = new Array(DENSITY);
+      });
     }
     for (j = 0; j < DENSITY; j++) {
       // 1 for points inside the circle, and 0 for points outside the circle.
@@ -828,10 +1061,9 @@ function updateDecisionBoundary(network: nn.Node[][], firstTime: boolean) {
         boundary[node.id][i][j] = node.output;
       });
       if (firstTime) {
-        // Go through all predefined inputs.
-        for (let nodeId in INPUTS) {
-          boundary[nodeId][i][j] = INPUTS[nodeId].f(x, y);
-        }
+        network[0].forEach((node, inputIndex) => {
+          boundary[node.id][i][j] = input[inputIndex];
+        });
       }
     }
   }
@@ -841,11 +1073,16 @@ function getLoss(network: nn.Node[][], dataPoints: Example2D[]): number {
   let loss = 0;
   for (let i = 0; i < dataPoints.length; i++) {
     let dataPoint = dataPoints[i];
-    let input = constructInput(dataPoint.x, dataPoint.y);
-    let output = nn.forwardProp(network, input);
-    loss += nn.Errors.SQUARE.error(output, dataPoint.label);
+    let input = constructInput(dataPoint);
+    let output = nn.forwardPropOutputs(network, input);
+    let target = getTarget(dataPoint);
+    let targets = Array.isArray(target) ? target : [target];
+    for (let outputIndex = 0; outputIndex < output.length; outputIndex++) {
+      loss += nn.Errors.SQUARE.error(output[outputIndex],
+          targets[outputIndex]);
+    }
   }
-  return loss / dataPoints.length;
+  return loss / (dataPoints.length * getOutputDimension());
 }
 
 function updateUI(firstStep = false) {
@@ -853,6 +1090,11 @@ function updateUI(firstStep = false) {
   updateWeightsUI(network, d3.select("g.core"));
   // Update the bias values visually.
   updateBiasesUI(network);
+  if (usingRandomWalk()) {
+    drawRandomWalkProjection();
+    updateLossAndIterationUI();
+    return;
+  }
   // Get the decision boundary of the network.
   updateDecisionBoundary(network, firstStep);
   let selectedId = selectedNodeId != null ?
@@ -865,7 +1107,12 @@ function updateUI(firstStep = false) {
     data.heatmap.updateBackground(reduceMatrix(boundary[data.id], 10),
         state.discretize);
   });
+  drawRandomWalkProjection();
 
+  updateLossAndIterationUI();
+}
+
+function updateLossAndIterationUI() {
   function zeroPad(n: number): string {
     let pad = "000000";
     return (pad + n).slice(-pad.length);
@@ -876,6 +1123,16 @@ function updateUI(firstStep = false) {
   }
 
   function humanReadable(n: number): string {
+    if (!isFinite(n)) {
+      return String(n);
+    }
+    let abs = Math.abs(n);
+    if (abs > 0 && abs < 0.001) {
+      return n.toExponential(2);
+    }
+    if (abs < 1) {
+      return n.toFixed(5);
+    }
     return n.toFixed(3);
   }
 
@@ -884,9 +1141,707 @@ function updateUI(firstStep = false) {
   d3.select("#loss-test").text(humanReadable(lossTest));
   d3.select("#iter-number").text(addCommas(zeroPad(iter)));
   lineChart.addDataPoint([lossTrain, lossTest]);
+  updateDeadNeuronMonitor();
+}
+
+function updateProjectionControls() {
+  ["projectionX", "projectionY", "projectionZ"].forEach((prop, i) => {
+    let select = d3.select("#" + prop);
+    if (!select.size()) {
+      return;
+    }
+    let options = select.selectAll("option").data(d3.range(getOutputDimension()));
+    options.enter().append("option");
+    options.attr("value", (d: number) => d).text((d: number) => "X" + (d + 1));
+    options.exit().remove();
+    if (state[prop] == null || state[prop] >= getOutputDimension()) {
+      state[prop] = Math.min(i, getOutputDimension() - 1);
+    }
+    select.property("value", state[prop]);
+  });
+}
+
+function drawRandomWalkProjection() {
+  updateOutputProjectionVisibility();
+  d3.select(".random-projection").style("display",
+      usingRandomWalk() ? null : "none");
+  if (!usingRandomWalk()) {
+    return;
+  }
+  drawProjectionView("large", "#random-walk-projection", "#projection-mode",
+      false);
+  drawProjectionView("output", "#output-3d-projection", "#output-3d-mode",
+      true);
+}
+
+function updateOutputProjectionVisibility() {
+  let show3d = usingRandomWalk();
+  d3.select("#heatmap").classed("showing-3d-output", show3d);
+  d3.select("#output-3d-projection")
+      .style("display", show3d ? "block" : "none");
+  d3.select("#output-3d-mode")
+      .style("display", show3d ? "block" : "none");
+  d3.select("#heatmap").selectAll(".heatmap-2d")
+      .style("display", show3d ? "none" : null);
+}
+
+function drawProjectionView(name: string, containerSelector: string,
+    modeSelector: string, useNetworkOutput: boolean) {
+  let container = document.querySelector(containerSelector) as HTMLDivElement;
+  if (container == null) {
+    return;
+  }
+  if (name === "output") {
+    drawOutputHeatmap3D(name, container, modeSelector);
+    return;
+  }
+  let payload = buildRandomWalkProjectionPayload(useNetworkOutput);
+  d3.select(modeSelector).text("Color: " + payload.mode +
+      " | axes: " + getProjectionAxisLabels().join("/") +
+      " | View: [-" + payload.range + ", " + payload.range + "]");
+  ensureProjectionScene(name, container);
+  let view = projectionViews[name];
+  if (view == null || view.webglFailed) {
+    drawFallbackProjection(container, payload.positions, payload.colors);
+    return;
+  }
+  clearProjectionDynamicObjects(view);
+  view.points = createPointCloud(payload.positions, payload.colors, 0.045,
+      0.88);
+  addProjectionObject(view, view.points);
+  renderProjectionView(name);
+}
+
+function drawOutputHeatmap3D(name: string, container: HTMLDivElement,
+    modeSelector: string) {
+  let payload = buildOutputHeatmap3DPayload();
+  d3.select(modeSelector).text("Truth line: random walk | " + payload.mode +
+      " | axes: " + payload.axes +
+      " | line scale x" + payload.lineScale.toFixed(1) +
+      " | View: [-" + payload.range + ", " + payload.range + "]");
+  ensureProjectionScene(name, container);
+  let view = projectionViews[name];
+  if (view == null || view.webglFailed) {
+    drawFallbackProjection(container, payload.truthLinePositions,
+        payload.truthLineColors);
+    return;
+  }
+  clearProjectionDynamicObjects(view);
+  addProjectionObject(view, createSegmentedLine(payload.truthLinePositions,
+      payload.truthLineColors, 0.013, 0.96));
+  if (payload.modelLinePositions.length >= 6) {
+    addProjectionObject(view, createSegmentedLine(payload.modelLinePositions,
+        payload.modelLineColors, 0.009, 0.78));
+  }
+  renderProjectionView(name);
+}
+
+function buildRandomWalkProjectionPayload(useNetworkOutput: boolean):
+    ProjectionPayload {
+  let px = Math.min(state.projectionX, getOutputDimension() - 1);
+  let py = Math.min(state.projectionY, getOutputDimension() - 1);
+  let pz = Math.min(state.projectionZ, getOutputDimension() - 1);
+  let range = getProjectionRange();
+  let allData = trainData.concat(testData);
+  let positions: number[] = [];
+  let colors: number[] = [];
+  let mode = selectedNodeId != null ? "node " + selectedNodeId :
+      (useNetworkOutput ? "model y1" : "target y1");
+  allData.forEach(point => {
+    let input = point.inputs || [point.x, point.y, 0];
+    positions.push(normalizeProjectionValue(input[px] || 0, range),
+        normalizeProjectionValue(input[py] || 0, range),
+        normalizeProjectionValue(input[pz] || 0, range));
+    let value = getProjectionColorValue(point, useNetworkOutput);
+    let color = d3.rgb(colorScale(value) as any);
+    colors.push(color.r / 255, color.g / 255, color.b / 255);
+  });
+  return {positions, colors, mode, range};
+}
+
+function buildOutputHeatmap3DPayload(): Heatmap3DPayload {
+  let axes = getProjectionAxes();
+  let range = getProjectionRange();
+  let orderedRegions = getRegionsByWalkStep();
+  let truthVectors = randomWalkPath.length > 0 ? randomWalkPath :
+      orderedRegions.map(region => region.targetVec);
+  let truthLinePositions: number[] = [];
+  let truthValues: number[] = [];
+  truthVectors.forEach(vector => {
+    addPosition(truthLinePositions, vector, axes, range);
+    truthValues.push(vector[0] || 0);
+  });
+  let modelLinePositions: number[] = [];
+  let modelValues: number[] = [];
+  let mode = selectedNodeId != null ? "node color: " + selectedNodeId :
+      "model line: network y";
+  orderedRegions.forEach(region => {
+    let point = exampleFromRegion(region);
+    if (selectedNodeId == null) {
+      let output = getModelOutputVector(point);
+      addPosition(modelLinePositions, output, axes, range);
+      modelValues.push(output[0] || 0);
+    } else {
+      addPosition(modelLinePositions, region.targetVec, axes, range);
+      modelValues.push(getNodeProjectionValue(point, selectedNodeId));
+    }
+  });
+  let valueScale = makeRandomWalkValueColorScale(truthValues.concat(
+      modelValues));
+  let lineScale = getOutputLineDisplayScale(truthLinePositions.concat(
+      modelLinePositions));
+  scalePositions(truthLinePositions, lineScale);
+  scalePositions(modelLinePositions, lineScale);
+  return {
+    truthLinePositions,
+    truthLineColors: valuesToColors(truthValues, valueScale),
+    modelLinePositions,
+    modelLineColors: valuesToColors(modelValues, valueScale),
+    mode,
+    axes: getProjectionAxisLabels().join("/"),
+    range,
+    lineScale
+  };
+}
+
+function getOutputLineDisplayScale(positions: number[]): number {
+  let maxAbs = 0;
+  positions.forEach(value => maxAbs = Math.max(maxAbs, Math.abs(value)));
+  if (maxAbs <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.min(10, 0.82 / maxAbs));
+}
+
+function scalePositions(positions: number[], scale: number) {
+  for (let i = 0; i < positions.length; i++) {
+    positions[i] *= scale;
+  }
+}
+
+function getRegionsByWalkStep(): RandomWalkRegion[] {
+  return randomWalkRegions.slice().sort((a, b) => a.walkStep - b.walkStep);
+}
+
+function getModelOutputVector(point: Example2D): number[] {
+  if (network == null) {
+    return point.labelVec || [point.label];
+  }
+  try {
+    return nn.forwardPropOutputs(network, constructInput(point));
+  } catch (e) {
+    return point.labelVec || [point.label];
+  }
+}
+
+function addPosition(result: number[], values: number[], axes: number[],
+    range: number) {
+  result.push(normalizeProjectionValue(values[axes[0]] || 0, range),
+      normalizeProjectionValue(values[axes[1]] || 0, range),
+      normalizeProjectionValue(values[axes[2]] || 0, range));
+}
+
+function valuesToColors(values: number[], scale): number[] {
+  let colors: number[] = [];
+  values.forEach(value => {
+    let color = d3.rgb(scale(value) as any);
+    colors.push(color.r / 255, color.g / 255, color.b / 255);
+  });
+  return colors;
+}
+
+function makeRandomWalkValueColorScale(values: number[]) {
+  let maxAbs = 0;
+  values.forEach(value => {
+    if (isFinite(value)) {
+      maxAbs = Math.max(maxAbs, Math.abs(value));
+    }
+  });
+  maxAbs = Math.max(maxAbs, 1 / Math.max(2, state.walkLengthK));
+  return d3.scale.linear<string, number>()
+      .domain([-maxAbs, 0, maxAbs])
+      .range(["#f59322", "#e8eaeb", "#0877bd"])
+      .clamp(true);
+}
+
+function getGroundTruthValue(point: Example2D): number {
+  if (point.regionTargetVec != null && point.regionTargetVec.length > 0) {
+    return point.regionTargetVec[0];
+  }
+  if (point.labelVec != null && point.labelVec.length > 0) {
+    return point.labelVec[0];
+  }
+  return point.label;
+}
+
+function exampleFromRegion(region: RandomWalkRegion): Example2D {
+  return {
+    x: region.center[0],
+    y: region.center.length > 1 ? region.center[1] : 0,
+    label: region.targetVec[0],
+    inputs: region.center.slice(),
+    labelVec: region.targetVec.slice(),
+    regionIndex: region.index,
+    regionCenter: region.center.slice(),
+    regionTargetVec: region.targetVec.slice()
+  };
+}
+
+function getProjectionAxes(): number[] {
+  let maxIndex = getOutputDimension() - 1;
+  return [
+    Math.min(state.projectionX, maxIndex),
+    Math.min(state.projectionY, maxIndex),
+    Math.min(state.projectionZ, maxIndex)
+  ];
+}
+
+function getProjectionAxisLabels(): string[] {
+  return getProjectionAxes().map(axis => "X" + (axis + 1));
+}
+
+function createPointCloud(positions: number[], colors: number[], size: number,
+    opacity: number): any {
+  let geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(
+      positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  return new THREE.Points(geometry, new THREE.PointsMaterial({
+    size,
+    vertexColors: true,
+    transparent: true,
+    opacity
+  }));
+}
+
+function createSegmentedLine(positions: number[], colors: number[],
+    radius: number, opacity: number): any {
+  let group = new THREE.Group();
+  let up = new THREE.Vector3(0, 1, 0);
+  for (let i = 0; i < positions.length - 3; i += 3) {
+    let start = new THREE.Vector3(positions[i], positions[i + 1],
+        positions[i + 2]);
+    let end = new THREE.Vector3(positions[i + 3], positions[i + 4],
+        positions[i + 5]);
+    let direction = new THREE.Vector3().subVectors(end, start);
+    let length = direction.length();
+    if (length <= 1e-6) {
+      continue;
+    }
+    let color = new THREE.Color(
+        (colors[i] + colors[i + 3]) / 2,
+        (colors[i + 1] + colors[i + 4]) / 2,
+        (colors[i + 2] + colors[i + 5]) / 2);
+    let geometry = new THREE.CylinderGeometry(radius, radius, length, 10);
+    let material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity
+    });
+    let segment = new THREE.Mesh(geometry, material);
+    segment.position.copy(start).add(end).multiplyScalar(0.5);
+    segment.quaternion.setFromUnitVectors(up, direction.normalize());
+    group.add(segment);
+  }
+  return group;
+}
+
+function clearProjectionDynamicObjects(view: ProjectionViewState) {
+  if (view.root == null) {
+    return;
+  }
+  view.dynamicObjects.forEach(object => view.root.remove(object));
+  view.dynamicObjects = [];
+  view.points = null;
+}
+
+function addProjectionObject(view: ProjectionViewState, object: any) {
+  view.root.add(object);
+  view.dynamicObjects.push(object);
+}
+
+function getProjectionColorValue(point: Example2D,
+    useNetworkOutput: boolean): number {
+  if (selectedNodeId != null) {
+    return getNodeProjectionValue(point, selectedNodeId);
+  }
+  if (useNetworkOutput) {
+    return getModelOutputValue(point, 0);
+  }
+  return getGroundTruthValue(point);
+}
+
+function getModelOutputValue(point: Example2D, outputIndex: number): number {
+  if (network == null) {
+    return point.label;
+  }
+  try {
+    let output = nn.forwardPropOutputs(network, constructInput(point));
+    return output[outputIndex] == null ? point.label : output[outputIndex];
+  } catch (e) {
+    return point.label;
+  }
+}
+
+function ensureProjectionScene(name: string, container: HTMLDivElement) {
+  let view = getProjectionView(name);
+  let width = container.clientWidth || 720;
+  let height = container.clientHeight || 420;
+  if (view.renderer != null) {
+    let canvas = view.renderer.domElement as HTMLCanvasElement;
+    if (canvas.width !== width || canvas.height !== height) {
+      view.camera.aspect = width / height;
+      view.camera.updateProjectionMatrix();
+      view.renderer.setSize(width, height);
+    }
+    return;
+  }
+  if (view.webglFailed) {
+    return;
+  }
+  try {
+    view.scene = new THREE.Scene();
+    view.scene.background = new THREE.Color(0xfafafa);
+    view.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 50);
+    view.camera.position.set(0, 0, 3.4);
+    view.renderer = new THREE.WebGLRenderer({antialias: true});
+    view.renderer.setSize(width, height);
+    container.innerHTML = "";
+    container.appendChild(view.renderer.domElement);
+    view.root = new THREE.Group();
+    view.scene.add(view.root);
+    view.root.add(new THREE.AxesHelper(name === "output" ? 1.05 : 1.15));
+  } catch (e) {
+    view.webglFailed = true;
+    view.renderer = null;
+  }
+}
+
+function getProjectionView(name: string): ProjectionViewState {
+  if (projectionViews[name] == null) {
+    projectionViews[name] = {
+      scene: null,
+      camera: null,
+      renderer: null,
+      root: null,
+      points: null,
+      dynamicObjects: [],
+      webglFailed: false
+    };
+  }
+  return projectionViews[name];
+}
+
+function renderProjectionView(name: string) {
+  let view = projectionViews[name];
+  if (view == null || view.renderer == null || view.scene == null ||
+      view.camera == null || view.root == null) {
+    return;
+  }
+  view.root.rotation.x = state.projectionRotateX * Math.PI / 180;
+  view.root.rotation.y = state.projectionRotateY * Math.PI / 180;
+  view.root.rotation.z = state.projectionRotateZ * Math.PI / 180;
+  view.root.scale.set(state.projectionScale, state.projectionScale,
+      state.projectionScale);
+  view.renderer.render(view.scene, view.camera);
+}
+
+function drawFallbackProjection(container: HTMLDivElement, positions: number[],
+    colors: number[]) {
+  let width = container.clientWidth || 720;
+  let height = container.clientHeight || 420;
+  let canvas = container.querySelector("canvas") as HTMLCanvasElement;
+  if (canvas == null) {
+    container.innerHTML = "";
+    canvas = document.createElement("canvas");
+    container.appendChild(canvas);
+  }
+  canvas.width = width;
+  canvas.height = height;
+  let context = canvas.getContext("2d");
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#fafafa";
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = "#ddd";
+  context.strokeRect(0, 0, width, height);
+  let scale = Math.min(width, height) * 0.42 * state.projectionScale;
+  let rx = state.projectionRotateX * Math.PI / 180;
+  let ry = state.projectionRotateY * Math.PI / 180;
+  let rz = state.projectionRotateZ * Math.PI / 180;
+  for (let i = 0; i < positions.length; i += 3) {
+    let rotated = rotatePoint(positions[i], positions[i + 1],
+        positions[i + 2], rx, ry, rz);
+    let colorIndex = i;
+    context.fillStyle = "rgb(" +
+        Math.round(colors[colorIndex] * 255) + "," +
+        Math.round(colors[colorIndex + 1] * 255) + "," +
+        Math.round(colors[colorIndex + 2] * 255) + ")";
+    context.beginPath();
+    context.arc(width / 2 + rotated[0] * scale,
+        height / 2 - rotated[1] * scale, 2.3, 0, Math.PI * 2);
+    context.fill();
+  }
+}
+
+function getProjectionRange(): number {
+  return Math.max(0.1, +state.projectionRange || 1);
+}
+
+function normalizeProjectionValue(value: number, range: number): number {
+  return Math.max(-1, Math.min(1, value / range));
+}
+
+function rotatePoint(x: number, y: number, z: number, rx: number, ry: number,
+    rz: number): number[] {
+  let cosX = Math.cos(rx), sinX = Math.sin(rx);
+  let y1 = y * cosX - z * sinX;
+  let z1 = y * sinX + z * cosX;
+  let cosY = Math.cos(ry), sinY = Math.sin(ry);
+  let x2 = x * cosY + z1 * sinY;
+  let z2 = -x * sinY + z1 * cosY;
+  let cosZ = Math.cos(rz), sinZ = Math.sin(rz);
+  return [x2 * cosZ - y1 * sinZ, x2 * sinZ + y1 * cosZ, z2];
+}
+
+function getNodeProjectionValue(point: Example2D, nodeId: string): number {
+  if (network == null) {
+    return point.label;
+  }
+  try {
+    nn.forwardProp(network, constructInput(point));
+  } catch (e) {
+    return point.label;
+  }
+  let node = findNode(network, nodeId);
+  return node == null ? point.label : node.output;
+}
+
+function findNode(network: nn.Node[][], nodeId: string): nn.Node {
+  for (let layerIdx = 0; layerIdx < network.length; layerIdx++) {
+    let layer = network[layerIdx];
+    for (let i = 0; i < layer.length; i++) {
+      if (layer[i].id === nodeId) {
+        return layer[i];
+      }
+    }
+  }
+  return null;
+}
+
+function updateDeadNeuronMonitor() {
+  let container = d3.select("#dead-neuron-stats");
+  if (!container.size() || network == null) {
+    return;
+  }
+  let rows: string[] = [];
+  for (let layerIdx = 1; layerIdx < network.length; layerIdx++) {
+    let layer = network[layerIdx];
+    let dead = 0;
+    for (let i = 0; i < layer.length; i++) {
+      let node = layer[i];
+      if (isNeuronUnhealthy(node)) {
+        dead++;
+      }
+    }
+    rows.push("L" + layerIdx + ": " + dead + "/" + layer.length);
+  }
+  container.text(rows.join("  "));
+}
+
+function isNeuronUnhealthy(node: nn.Node): boolean {
+  let eps = state.deadNeuronEps;
+  if (node.activation === nn.Activations.RELU) {
+    return Math.abs(node.output) <= eps;
+  }
+  if (node.activation === nn.Activations.SIGMOID) {
+    return node.output <= eps || node.output >= 1 - eps;
+  }
+  if (node.activation === nn.Activations.TANH) {
+    return node.output <= -1 + eps || node.output >= 1 - eps;
+  }
+  return Math.abs(node.output) <= eps;
+}
+
+function runAutoSweep(kind: string) {
+  if (!usingRandomWalk()) {
+    d3.select("#sweep-status").text("Switch to random-walk regression first.");
+    return;
+  }
+  d3.select("#sweep-status").text("Running " + kind + " sweep...");
+  let originalK = state.walkLengthK;
+  let originalSeed = state.seed;
+  let ks = [5, 10, 20, 40];
+  let tbody = d3.select("#sweep-results tbody");
+  tbody.selectAll("tr").remove();
+  let results: any[] = [];
+  ks.forEach(k => {
+    state.walkLengthK = k;
+    Math.seedrandom(originalSeed);
+    let data = randomWalkRegressionData({
+      dimension: state.dimensionN,
+      walkLength: state.walkLengthK,
+      sampleMultiplier: state.sampleMultiplierM,
+      noiseEnabled: state.noiseEnabled,
+      noiseMean: state.noiseMean,
+      noiseVariance: state.noiseVariance
+    });
+    shuffle(data);
+    let splitIndex = Math.floor(data.length * 0.8);
+    let localTrain = data.slice(0, splitIndex);
+    let localTest = data.slice(splitIndex);
+    let values = kind === "depth" ? [2, 4, 6, 8] : [4, 8, 16, 32];
+    values.forEach(value => {
+      let depth = kind === "depth" ? value : 4;
+      let width = kind === "width" ? value : 16;
+      let shape = d3.range(depth).map(() => width);
+      let localNetwork = buildSweepNetwork(shape);
+      for (let epoch = 0; epoch < state.sweepEpochs; epoch++) {
+        trainOneEpoch(localNetwork, localTrain);
+      }
+      results.push({
+        kind,
+        k,
+        depth,
+        width,
+        trainLoss: getLoss(localNetwork, localTrain),
+        testLoss: getLoss(localNetwork, localTest)
+      });
+    });
+  });
+  state.walkLengthK = originalK;
+  state.seed = originalSeed;
+  renderSweepResults(results);
+  d3.select("#sweep-status").text("Sweep complete.");
+}
+
+function buildSweepNetwork(hiddenShape: number[]): nn.Node[][] {
+  let inputIds = constructInputIds();
+  let shape = [inputIds.length].concat(hiddenShape)
+      .concat([getOutputDimension()]);
+  return nn.buildNetwork(shape, state.activation, nn.Activations.LINEAR,
+      state.regularization, inputIds, state.initZero);
+}
+
+function trainOneEpoch(localNetwork: nn.Node[][], data: Example2D[]) {
+  data.forEach((point, i) => {
+    nn.forwardProp(localNetwork, constructInput(point));
+    nn.backProp(localNetwork, getTarget(point), nn.Errors.SQUARE);
+    if ((i + 1) % state.batchSize === 0) {
+      nn.updateWeights(localNetwork, state.learningRate,
+          state.regularizationRate);
+    }
+  });
+}
+
+function renderSweepResults(results: any[]) {
+  let rows = d3.select("#sweep-results tbody").selectAll("tr").data(results);
+  let entered = rows.enter().append("tr");
+  ["kind", "k", "depth", "width", "trainLoss", "testLoss"].forEach(key => {
+    entered.append("td").attr("class", key);
+  });
+  rows.select("td.kind").text(d => d.kind);
+  rows.select("td.k").text(d => d.k);
+  rows.select("td.depth").text(d => d.depth);
+  rows.select("td.width").text(d => d.width);
+  rows.select("td.trainLoss").text(d => d.trainLoss.toFixed(4));
+  rows.select("td.testLoss").text(d => d.testLoss.toFixed(4));
+  rows.exit().remove();
+  drawSweepHeatmap(results);
+}
+
+function drawSweepHeatmap(results: any[]) {
+  let canvas = document.querySelector("#sweep-heatmap") as HTMLCanvasElement;
+  if (canvas == null) {
+    return;
+  }
+  let context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#fafafa";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  if (results.length === 0) {
+    return;
+  }
+  let ks = uniqueSorted(results.map(r => r.k));
+  let axisName = results[0].kind === "depth" ? "depth" : "width";
+  let capacities = uniqueSorted(results.map(r => r[axisName]));
+  let losses = results.map(r => r.testLoss);
+  let minLoss = Math.min.apply(null, losses);
+  let maxLoss = Math.max.apply(null, losses);
+  let left = 36;
+  let top = 12;
+  let right = 8;
+  let bottom = 26;
+  let plotWidth = canvas.width - left - right;
+  let plotHeight = canvas.height - top - bottom;
+  let cellWidth = plotWidth / ks.length;
+  let cellHeight = plotHeight / capacities.length;
+
+  context.font = "10px sans-serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  results.forEach(result => {
+    let xIndex = ks.indexOf(result.k);
+    let yIndex = capacities.indexOf(result[axisName]);
+    let normalized = maxLoss === minLoss ? 0 : (result.testLoss - minLoss) /
+        (maxLoss - minLoss);
+    context.fillStyle = d3.interpolateRgb("#e8eaeb", "#0877bd")(1 - normalized);
+    context.fillRect(left + xIndex * cellWidth, top + yIndex * cellHeight,
+        cellWidth, cellHeight);
+    context.fillStyle = "#222";
+    context.fillText(result.testLoss.toFixed(2),
+        left + xIndex * cellWidth + cellWidth / 2,
+        top + yIndex * cellHeight + cellHeight / 2);
+  });
+
+  context.strokeStyle = "#ddd";
+  context.strokeRect(left, top, plotWidth, plotHeight);
+  context.fillStyle = "#333";
+  ks.forEach((k, i) => {
+    context.fillText("K" + k, left + i * cellWidth + cellWidth / 2,
+        top + plotHeight + 12);
+  });
+  context.textAlign = "right";
+  capacities.forEach((capacity, i) => {
+    context.fillText(String(capacity), left - 6,
+        top + i * cellHeight + cellHeight / 2);
+  });
+  context.textAlign = "left";
+  context.fillText(axisName, 4, 8);
+}
+
+function uniqueSorted(values: number[]): number[] {
+  let seen: {[key: string]: boolean} = {};
+  let result: number[] = [];
+  values.forEach(value => {
+    let key = String(value);
+    if (!seen[key]) {
+      seen[key] = true;
+      result.push(value);
+    }
+  });
+  return result.sort((a, b) => a - b);
 }
 
 function constructInputIds(): string[] {
+  let rawSize = usingRandomWalk() ?
+      getOutputDimension() : constructRawInput(0, 0).length;
+  let frontendSize = getFrontendOutputSize(rawSize);
+  inputLabels = {};
+  if (state.useTransformer) {
+    let ids = buildFeatureIds("t", frontendSize);
+    ids.forEach((id, i) => inputLabels[id] = "T_" + (i + 1));
+    return ids;
+  }
+  if (state.useCnnFrontend) {
+    let ids = buildFeatureIds("c", frontendSize);
+    ids.forEach((id, i) => inputLabels[id] = "C_" + (i + 1));
+    return ids;
+  }
+  if (usingRandomWalk()) {
+    let ids = buildFeatureIds("x", rawSize);
+    ids.forEach((id, i) => inputLabels[id] = "X_" + (i + 1));
+    return ids;
+  }
   let result: string[] = [];
   for (let inputName in INPUTS) {
     if (state[inputName]) {
@@ -896,7 +1851,34 @@ function constructInputIds(): string[] {
   return result;
 }
 
-function constructInput(x: number, y: number): number[] {
+function buildFeatureIds(prefix: string, count: number): string[] {
+  let ids: string[] = [];
+  for (let i = 0; i < count; i++) {
+    ids.push(prefix + (i + 1));
+  }
+  return ids;
+}
+
+function constructInput(xOrPoint: number | Example2D, y?: number): number[] {
+  return applyArchitectureFrontend(constructRawInput(xOrPoint, y));
+}
+
+function constructRawInput(xOrPoint: number | Example2D, y?: number): number[] {
+  if (typeof xOrPoint !== "number") {
+    let point = xOrPoint as Example2D;
+    if (point.inputs != null) {
+      return point.inputs.slice();
+    }
+    return constructRawInput(point.x, point.y);
+  }
+  let x = xOrPoint as number;
+  if (usingRandomWalk()) {
+    let input: number[] = [];
+    for (let i = 0; i < getOutputDimension(); i++) {
+      input.push(i === 0 ? x : (i === 1 ? y : 0));
+    }
+    return input;
+  }
   let input: number[] = [];
   for (let inputName in INPUTS) {
     if (state[inputName]) {
@@ -906,12 +1888,116 @@ function constructInput(x: number, y: number): number[] {
   return input;
 }
 
+function applyArchitectureFrontend(input: number[]): number[] {
+  if (state.useTransformer) {
+    return transformerFrontend(input);
+  }
+  if (state.useCnnFrontend) {
+    return cnnFrontend(input);
+  }
+  return input;
+}
+
+function cnnFrontend(input: number[]): number[] {
+  let filters = 8;
+  let kernelSize = input.length < 2 ? 1 : 2;
+  let positions = Math.max(1, input.length - kernelSize + 1);
+  let result: number[] = [];
+  for (let filter = 0; filter < filters; filter++) {
+    let sum = 0;
+    for (let position = 0; position < positions; position++) {
+      let z = frontendWeight(filter, 0, 0) * 0.1;
+      for (let k = 0; k < kernelSize; k++) {
+        z += input[position + k] * frontendWeight(filter, k + 1, 0);
+      }
+      sum += z;
+    }
+    result.push(sum / positions);
+  }
+  return result;
+}
+
+function transformerFrontend(input: number[]): number[] {
+  let dModel = 16;
+  let heads = 4;
+  let headDim = dModel / heads;
+  let tokens = input.map((value, tokenIndex) => {
+    let embedding: number[] = [];
+    for (let d = 0; d < dModel; d++) {
+      embedding.push(value * frontendWeight(tokenIndex, d, 1) +
+          0.1 * Math.sin((tokenIndex + 1) * (d + 1)));
+    }
+    return embedding;
+  });
+  if (tokens.length === 0) {
+    let emptyToken: number[] = [];
+    for (let d = 0; d < dModel; d++) {
+      emptyToken.push(0);
+    }
+    tokens.push(emptyToken);
+  }
+  let encoded = tokens.map((token, tokenIndex) => {
+    let context: number[] = [];
+    for (let head = 0; head < heads; head++) {
+      let scores = tokens.map((other, otherIndex) => {
+        let score = 0;
+        for (let d = 0; d < headDim; d++) {
+          let modelIndex = head * headDim + d;
+          let q = token[modelIndex] * frontendWeight(head, modelIndex, 2);
+          let k = other[modelIndex] * frontendWeight(head, modelIndex, 3);
+          score += q * k;
+        }
+        return score / Math.sqrt(headDim) +
+            (tokenIndex === otherIndex ? 0.05 : 0);
+      });
+      let weights = softmax(scores);
+      for (let d = 0; d < headDim; d++) {
+        let modelIndex = head * headDim + d;
+        let value = 0;
+        for (let otherIndex = 0; otherIndex < tokens.length; otherIndex++) {
+          value += weights[otherIndex] * tokens[otherIndex][modelIndex] *
+              frontendWeight(head, modelIndex, 4);
+        }
+        context.push(value);
+      }
+    }
+    let ffn: number[] = [];
+    for (let d = 0; d < dModel; d++) {
+      let hidden = Math.max(0, context[d] * frontendWeight(d, 0, 5) +
+          frontendWeight(d, 1, 5) * 0.1);
+      ffn.push(context[d] + hidden * frontendWeight(d, 2, 5));
+    }
+    return ffn;
+  });
+  let pooled = new Array(dModel);
+  for (let d = 0; d < dModel; d++) {
+    let sum = 0;
+    for (let i = 0; i < encoded.length; i++) {
+      sum += encoded[i][d];
+    }
+    pooled[d] = sum / encoded.length;
+  }
+  return pooled;
+}
+
+function softmax(values: number[]): number[] {
+  let max = Math.max.apply(null, values);
+  let exps = values.map(value => Math.exp(value - max));
+  let sum = exps.reduce((a, b) => a + b, 0);
+  return exps.map(value => value / sum);
+}
+
+function frontendWeight(a: number, b: number, c: number): number {
+  return Math.sin((a + 1) * 12.9898 + (b + 1) * 78.233 +
+      (c + 1) * 37.719);
+}
+
 function oneStep(): void {
   iter++;
   trainData.forEach((point, i) => {
-    let input = constructInput(point.x, point.y);
+    let input = constructInput(point);
     nn.forwardProp(network, input);
-    nn.backProp(network, point.label, nn.Errors.SQUARE);
+    nn.backProp(network, getTarget(point), nn.Errors.SQUARE);
     if ((i + 1) % state.batchSize === 0) {
       nn.updateWeights(network, state.learningRate, state.regularizationRate);
     }
@@ -951,12 +2037,14 @@ function reset(onStartup=false) {
 
   // Make a simple network.
   iter = 0;
-  let numInputs = constructInput(0 , 0).length;
-  let shape = [numInputs].concat(state.networkShape).concat([1]);
+  let inputIds = constructInputIds();
+  let numInputs = inputIds.length;
+  let shape = [numInputs].concat(state.networkShape)
+      .concat([getOutputDimension()]);
   let outputActivation = (state.problem === Problem.REGRESSION) ?
       nn.Activations.LINEAR : nn.Activations.TANH;
   network = nn.buildNetwork(shape, state.activation, outputActivation,
-      state.regularization, constructInputIds(), state.initZero);
+      state.regularization, inputIds, state.initZero);
   lossTrain = getLoss(network, trainData);
   lossTest = getLoss(network, testData);
   drawNetwork(network);
@@ -1015,6 +2103,20 @@ function drawDatasetThumbnails() {
     }
   }
   if (state.problem === Problem.REGRESSION) {
+    let randomWalkCanvas: any =
+        document.querySelector("#random-walk-dataset");
+    if (randomWalkCanvas != null) {
+      renderThumbnail(randomWalkCanvas, function() {
+        return randomWalkRegressionData({
+          dimension: Math.max(2, state.dimensionN),
+          walkLength: state.walkLengthK,
+          sampleMultiplier: 10,
+          noiseEnabled: false,
+          noiseMean: 0,
+          noiseVariance: 0
+        });
+      });
+    }
     for (let regDataset in regDatasets) {
       let canvas: any =
           document.querySelector(`canvas[data-regDataset=${regDataset}]`);
@@ -1072,11 +2174,31 @@ function generateData(firstTime = false) {
     userHasInteracted();
   }
   Math.seedrandom(state.seed);
-  let numSamples = (state.problem === Problem.REGRESSION) ?
-      NUM_SAMPLES_REGRESS : NUM_SAMPLES_CLASSIFY;
-  let generator = state.problem === Problem.CLASSIFICATION ?
-      state.dataset : state.regDataset;
-  let data = generator(numSamples, state.noise / 100);
+  if (d3.select("#seed").size()) {
+    d3.select("#seed").property("value", state.seed);
+  }
+  let data: Example2D[];
+  if (usingRandomWalk()) {
+    data = randomWalkRegressionData({
+      dimension: state.dimensionN,
+      walkLength: state.walkLengthK,
+      sampleMultiplier: state.sampleMultiplierM,
+      noiseEnabled: state.noiseEnabled,
+      noiseMean: state.noiseMean,
+      noiseVariance: state.noiseVariance
+    });
+    let generatedData: any = data;
+    randomWalkRegions = generatedData.randomWalkRegions || [];
+    randomWalkPath = generatedData.randomWalkPath || [];
+  } else {
+    randomWalkRegions = [];
+    randomWalkPath = [];
+    let numSamples = (state.problem === Problem.REGRESSION) ?
+        NUM_SAMPLES_REGRESS : NUM_SAMPLES_CLASSIFY;
+    let generator = state.problem === Problem.CLASSIFICATION ?
+        state.dataset : state.regDataset;
+    data = generator(numSamples, state.noise / 100);
+  }
   // Shuffle the data in-place.
   shuffle(data);
   // Split into train and test data.
@@ -1085,6 +2207,8 @@ function generateData(firstTime = false) {
   testData = data.slice(splitIndex);
   heatMap.updatePoints(trainData);
   heatMap.updateTestPoints(state.showTestData ? testData : []);
+  updateProjectionControls();
+  drawRandomWalkProjection();
 }
 
 let firstInteraction = true;

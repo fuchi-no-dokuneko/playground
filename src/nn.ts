@@ -250,7 +250,8 @@ export function buildNetwork(
  *     nodes in the network.
  * @return The final output of the network.
  */
-export function forwardProp(network: Node[][], inputs: number[]): number {
+export function forwardPropOutputs(network: Node[][], inputs: number[]):
+    number[] {
   let inputLayer = network[0];
   if (inputs.length !== inputLayer.length) {
     throw new Error("The number of inputs must match the number of nodes in" +
@@ -269,7 +270,11 @@ export function forwardProp(network: Node[][], inputs: number[]): number {
       node.updateOutput();
     }
   }
-  return network[network.length - 1][0].output;
+  return network[network.length - 1].map(node => node.output);
+}
+
+export function forwardProp(network: Node[][], inputs: number[]): number {
+  return forwardPropOutputs(network, inputs)[0];
 }
 
 /**
@@ -279,12 +284,20 @@ export function forwardProp(network: Node[][], inputs: number[]): number {
  * derivatives with respect to each node, and each weight
  * in the network.
  */
-export function backProp(network: Node[][], target: number,
+export function backProp(network: Node[][], target: number | number[],
     errorFunc: ErrorFunction): void {
   // The output node is a special case. We use the user-defined error
   // function for the derivative.
-  let outputNode = network[network.length - 1][0];
-  outputNode.outputDer = errorFunc.der(outputNode.output, target);
+  let outputLayer = network[network.length - 1];
+  let targets = Array.isArray(target) ? target : [target];
+  if (targets.length !== outputLayer.length) {
+    throw new Error("The number of targets must match the number of output " +
+        "nodes");
+  }
+  for (let i = 0; i < outputLayer.length; i++) {
+    let outputNode = outputLayer[i];
+    outputNode.outputDer = errorFunc.der(outputNode.output, targets[i]);
+  }
 
   // Go through the layers backwards.
   for (let layerIdx = network.length - 1; layerIdx >= 1; layerIdx--) {
@@ -392,4 +405,9 @@ export function forEachNode(network: Node[][], ignoreInputs: boolean,
 /** Returns the output node in the network. */
 export function getOutputNode(network: Node[][]) {
   return network[network.length - 1][0];
+}
+
+/** Returns all output nodes in the network. */
+export function getOutputNodes(network: Node[][]) {
+  return network[network.length - 1];
 }

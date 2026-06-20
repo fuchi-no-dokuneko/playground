@@ -169,9 +169,54 @@ limitations under the License.
           <div class="dataset" title="Multi gaussian">
             <canvas class="data-thumbnail" data-regDataset="reg-gauss"></canvas>
           </div>
+          <div class="dataset" title="N-dimensional random walk">
+            <canvas class="data-thumbnail" id="random-walk-dataset"></canvas>
+          </div>
         </div>
       </div>
       <div>
+        <div class="ui-dimensionN">
+          <label for="dimensionN">N input/output dimensions:&nbsp;&nbsp;<span class="value">XX</span></label>
+          <p class="slider">
+            <input class="mdl-slider mdl-js-slider" type="range" id="dimensionN" min="1" max="8" step="1">
+          </p>
+        </div>
+        <div class="ui-walkLengthK">
+          <label for="walkLengthK">K random-walk/grid regions:&nbsp;&nbsp;<span class="value">XX</span></label>
+          <p class="slider">
+            <input class="mdl-slider mdl-js-slider" type="range" id="walkLengthK" min="2" max="80" step="1">
+          </p>
+        </div>
+        <div class="ui-sampleMultiplierM">
+          <label for="sampleMultiplierM">M sample multiplier:&nbsp;&nbsp;<span class="value">XX</span></label>
+          <p class="slider">
+            <input class="mdl-slider mdl-js-slider" type="range" id="sampleMultiplierM" min="1" max="80" step="1">
+          </p>
+        </div>
+        <div class="ui-seed">
+          <label for="seed">Seed</label>
+          <input id="seed" type="text">
+        </div>
+        <div class="ui-noiseGaussian">
+          <label class="mdl-checkbox mdl-js-checkbox mdl-js-ripple-effect" for="noiseEnabled">
+            <input type="checkbox" id="noiseEnabled" class="mdl-checkbox__input">
+            <span class="mdl-checkbox__label label">Enable Gaussian output noise</span>
+          </label>
+          <label for="noiseMean">Noise mean</label>
+          <input id="noiseMean" type="number" step="0.001">
+          <label for="noiseVariance">Noise variance</label>
+          <input id="noiseVariance" type="number" min="0" step="0.001">
+        </div>
+        <div class="ui-architectureFrontend architecture-frontend">
+          <label class="mdl-checkbox mdl-js-checkbox mdl-js-ripple-effect" for="useCnnFrontend">
+            <input type="checkbox" id="useCnnFrontend" class="mdl-checkbox__input">
+            <span class="mdl-checkbox__label label">Use CNN Frontend</span>
+          </label>
+          <label class="mdl-checkbox mdl-js-checkbox mdl-js-ripple-effect" for="useTransformer">
+            <input type="checkbox" id="useTransformer" class="mdl-checkbox__input">
+            <span class="mdl-checkbox__label label">Use Transformer</span>
+          </label>
+        </div>
         <div class="ui-percTrainData">
           <label for="percTrainData">Ratio of training to test data:&nbsp;&nbsp;<span class="value">XX</span>%</label>
           <p class="slider">
@@ -273,7 +318,41 @@ limitations under the License.
         </div>
         <div id="linechart"></div>
       </div>
-      <div id="heatmap"></div>
+      <div class="dead-neuron-monitor ui-deadNeuronMonitor">
+        <label for="deadNeuronEps">Dead neuron epsilon</label>
+        <input id="deadNeuronEps" type="number" min="0" step="0.000001">
+        <div id="dead-neuron-stats"></div>
+      </div>
+      <div class="auto-sweep ui-autoSweep">
+        <label for="sweepEpochs">Auto-sweep epochs</label>
+        <input id="sweepEpochs" type="number" min="1" step="1">
+        <button class="basic-button" id="sweep-depth-button" title="Run depth versus K sweep">Sweep depth</button>
+        <button class="basic-button" id="sweep-width-button" title="Run width versus K sweep">Sweep width</button>
+        <div id="sweep-status"></div>
+        <table id="sweep-results">
+          <thead>
+            <tr>
+              <th>Sweep</th>
+              <th>K</th>
+              <th>Depth</th>
+              <th>Width</th>
+              <th>Train loss</th>
+              <th>Test loss</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <canvas id="sweep-heatmap" width="260" height="160"></canvas>
+      </div>
+      <div id="heatmap">
+        <div id="output-3d-projection"></div>
+        <div id="output-3d-mode"></div>
+        <div id="output-3d-legend">
+          <span><i class="field"></i>true walk line</span>
+          <span><i class="train"></i>model line</span>
+          <span><i class="test"></i>hover colors</span>
+        </div>
+      </div>
       <div style="float:left;margin-top:20px">
         <div style="display:flex; align-items:center;">
 
@@ -309,6 +388,44 @@ limitations under the License.
     </div>
 
   </div>
+
+  <section id="projection-panel" class="l--page ui-randomProjection random-projection">
+    <div class="projection-header">
+      <h4>3D Projection</h4>
+      <div id="projection-mode"></div>
+    </div>
+    <div class="projection-controls">
+      <div class="projection-control projection-dimensions">
+        <label>Dimensions</label>
+        <div class="projection-dimension-selects">
+          <select id="projectionX"></select>
+          <select id="projectionY"></select>
+          <select id="projectionZ"></select>
+        </div>
+      </div>
+      <div class="projection-control">
+        <label for="projectionRange">Range ±<span class="value" id="projectionRangeValue">1</span></label>
+        <input type="range" id="projectionRange" min="0.1" max="6" step="0.1">
+      </div>
+      <div class="projection-control">
+        <label for="projectionRotateX">Rotate X</label>
+        <input type="range" id="projectionRotateX" min="-180" max="180" step="1">
+      </div>
+      <div class="projection-control">
+        <label for="projectionRotateY">Rotate Y</label>
+        <input type="range" id="projectionRotateY" min="-180" max="180" step="1">
+      </div>
+      <div class="projection-control">
+        <label for="projectionRotateZ">Rotate Z</label>
+        <input type="range" id="projectionRotateZ" min="-180" max="180" step="1">
+      </div>
+      <div class="projection-control">
+        <label for="projectionScale">Zoom</label>
+        <input type="range" id="projectionScale" min="0.5" max="2.5" step="0.05">
+      </div>
+    </div>
+    <div id="random-walk-projection"></div>
+  </section>
 
   <!-- More -->
   <div class="more">

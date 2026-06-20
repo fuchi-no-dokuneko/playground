@@ -21,8 +21,21 @@ import * as d3 from 'd3';
 export type Example2D = {
   x: number,
   y: number,
-  label: number
+  label: number,
+  inputs?: number[],
+  labelVec?: number[],
+  regionIndex?: number,
+  regionCenter?: number[],
+  regionTargetVec?: number[]
 };
+
+export interface RandomWalkRegion {
+  index: number;
+  walkStep: number;
+  coords: number[];
+  center: number[];
+  targetVec: number[];
+}
 
 type Point = {
   x: number,
@@ -50,7 +63,126 @@ export function shuffle(array: any[]): void {
   }
 }
 
+export interface RandomWalkOptions {
+  dimension: number;
+  walkLength: number;
+  sampleMultiplier: number;
+  noiseEnabled: boolean;
+  noiseMean: number;
+  noiseVariance: number;
+}
+
 export type DataGenerator = (numSamples: number, noise: number) => Example2D[];
+
+export function randomWalkRegressionData(
+    options: RandomWalkOptions): Example2D[] {
+  let dimension = Math.max(1, Math.floor(options.dimension));
+  let walkLength = Math.max(1, Math.floor(options.walkLength));
+  let sampleMultiplier = Math.max(1, Math.floor(options.sampleMultiplier));
+  let numSamples = walkLength * sampleMultiplier;
+  let walk = generateRandomWalk(dimension, walkLength);
+  let regionOrder = d3.range(walkLength);
+  shuffle(regionOrder);
+  let regions = buildRandomWalkRegions(dimension, walkLength, walk,
+      regionOrder);
+  let points: Example2D[] = [];
+
+  for (let i = 0; i < numSamples; i++) {
+    let regionIndex = Math.floor(Math.random() * walkLength);
+    let inputs = sampleFromRegion(regionIndex, walkLength, dimension);
+    let region = regions[regionIndex];
+    let baseTarget = region.targetVec;
+    let labelVec = baseTarget.map(value => {
+      if (!options.noiseEnabled) {
+        return value;
+      }
+      return value + normalRandom(options.noiseMean, options.noiseVariance);
+    });
+    points.push({
+      x: inputs[0],
+      y: dimension > 1 ? inputs[1] : 0,
+      label: labelVec[0],
+      inputs,
+      labelVec,
+      regionIndex,
+      regionCenter: region.center.slice(),
+      regionTargetVec: baseTarget.slice()
+    });
+  }
+  (points as any).randomWalkRegions = regions;
+  (points as any).randomWalkPath = walk.map(step => step.slice());
+  return points;
+}
+
+function buildRandomWalkRegions(dimension: number, walkLength: number,
+    walk: number[][], regionOrder: number[]): RandomWalkRegion[] {
+  let regions: RandomWalkRegion[] = [];
+  for (let regionIndex = 0; regionIndex < walkLength; regionIndex++) {
+    let coords = regionCoordsFromIndex(regionIndex, walkLength, dimension);
+    regions.push({
+      index: regionIndex,
+      walkStep: regionOrder[regionIndex],
+      coords,
+      center: regionCenterFromCoords(coords, walkLength, dimension),
+      targetVec: walk[regionOrder[regionIndex]].slice()
+    });
+  }
+  return regions;
+}
+
+function generateRandomWalk(dimension: number, walkLength: number): number[][] {
+  let position = new Array(dimension);
+  for (let i = 0; i < dimension; i++) {
+    position[i] = 0;
+  }
+  let result: number[][] = [];
+  for (let step = 0; step < walkLength; step++) {
+    let dim = Math.floor(Math.random() * dimension);
+    let direction = Math.random() < 0.5 ? -1 : 1;
+    position[dim] += direction / walkLength;
+    result.push(position.slice());
+  }
+  return result;
+}
+
+function sampleFromRegion(
+    regionIndex: number, numRegions: number, dimension: number): number[] {
+  let side = randomWalkRegionSide(numRegions, dimension);
+  let cellSize = 2 / side;
+  let coords = regionCoordsFromIndex(regionIndex, numRegions, dimension);
+  return coords.map(coord => {
+    let min = -1 + coord * cellSize;
+    let max = Math.min(1, min + cellSize);
+    return randUniform(min, max);
+  });
+}
+
+function regionCoordsFromIndex(
+    regionIndex: number, numRegions: number, dimension: number): number[] {
+  let side = randomWalkRegionSide(numRegions, dimension);
+  let coords = new Array(dimension);
+  let remainder = regionIndex;
+  for (let dim = 0; dim < dimension; dim++) {
+    coords[dim] = remainder % side;
+    remainder = Math.floor(remainder / side);
+  }
+  return coords;
+}
+
+function regionCenterFromCoords(
+    coords: number[], numRegions: number, dimension: number): number[] {
+  let side = randomWalkRegionSide(numRegions, dimension);
+  let cellSize = 2 / side;
+  let center = new Array(dimension);
+  for (let dim = 0; dim < dimension; dim++) {
+    center[dim] = -1 + coords[dim] * cellSize + cellSize / 2;
+  }
+  return center;
+}
+
+function randomWalkRegionSide(numRegions: number, dimension: number): number {
+  return Math.ceil(Math.pow(numRegions, 1 / dimension));
+}
 
 export function classifyTwoGaussData(numSamples: number, noise: number):
     Example2D[] {

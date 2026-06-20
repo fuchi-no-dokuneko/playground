@@ -48,6 +48,11 @@ export let regDatasets: {[key: string]: dataset.DataGenerator} = {
   "reg-gauss": dataset.regressGaussian
 };
 
+export enum RegressionDatasetKind {
+  LEGACY,
+  RANDOM_WALK
+}
+
 export function getKeyFromValue(obj: any, value: any): string {
   for (let key in obj) {
     if (obj[key] === value) {
@@ -112,6 +117,25 @@ export class State {
     {name: "learningRate", type: Type.NUMBER},
     {name: "regularizationRate", type: Type.NUMBER},
     {name: "noise", type: Type.NUMBER},
+    {name: "dimensionN", type: Type.NUMBER},
+    {name: "walkLengthK", type: Type.NUMBER},
+    {name: "sampleMultiplierM", type: Type.NUMBER},
+    {name: "noiseEnabled", type: Type.BOOLEAN},
+    {name: "noiseMean", type: Type.NUMBER},
+    {name: "noiseVariance", type: Type.NUMBER},
+    {name: "regressionDatasetKind", type: Type.NUMBER},
+    {name: "deadNeuronEps", type: Type.NUMBER},
+    {name: "sweepEpochs", type: Type.NUMBER},
+    {name: "projectionX", type: Type.NUMBER},
+    {name: "projectionY", type: Type.NUMBER},
+    {name: "projectionZ", type: Type.NUMBER},
+    {name: "projectionRotateX", type: Type.NUMBER},
+    {name: "projectionRotateY", type: Type.NUMBER},
+    {name: "projectionRotateZ", type: Type.NUMBER},
+    {name: "projectionScale", type: Type.NUMBER},
+    {name: "projectionRange", type: Type.NUMBER},
+    {name: "useCnnFrontend", type: Type.BOOLEAN},
+    {name: "useTransformer", type: Type.BOOLEAN},
     {name: "networkShape", type: Type.ARRAY_NUMBER},
     {name: "seed", type: Type.STRING},
     {name: "showTestData", type: Type.BOOLEAN},
@@ -138,13 +162,32 @@ export class State {
   regularizationRate = 0;
   showTestData = false;
   noise = 0;
+  dimensionN = 3;
+  walkLengthK = 20;
+  sampleMultiplierM = 20;
+  noiseEnabled = false;
+  noiseMean = 0;
+  noiseVariance = 0.001;
+  regressionDatasetKind = RegressionDatasetKind.RANDOM_WALK;
+  deadNeuronEps = 1e-6;
+  sweepEpochs = 50;
+  projectionX = 0;
+  projectionY = 1;
+  projectionZ = 2;
+  projectionRotateX = 25;
+  projectionRotateY = -35;
+  projectionRotateZ = 0;
+  projectionScale = 1;
+  projectionRange = 1;
+  useCnnFrontend = false;
+  useTransformer = false;
   batchSize = 10;
   discretize = false;
   tutorial: string = null;
   percTrainData = 50;
   activation = nn.Activations.TANH;
   regularization: nn.RegularizationFunction = null;
-  problem = Problem.CLASSIFICATION;
+  problem = Problem.REGRESSION;
   initZero = false;
   hideText = false;
   collectStats = false;

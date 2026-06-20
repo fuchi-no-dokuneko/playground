@@ -461,6 +461,71 @@ g.column rect {
   margin-top: 10px;
 }
 
+#output-3d-projection {
+  display: none;
+  width: 300px;
+  height: 300px;
+  border: 1px solid #d6d6d6;
+  background: #fafafa;
+  box-sizing: border-box;
+}
+
+#output-3d-projection canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#output-3d-mode {
+  display: none;
+  width: 300px;
+  margin-top: 6px;
+  color: #555;
+  font-size: 11px;
+  line-height: 1.25em;
+  text-align: right;
+}
+
+#output-3d-legend {
+  display: none;
+  width: 300px;
+  margin-top: 6px;
+  color: #666;
+  font-size: 11px;
+  line-height: 1.25em;
+}
+
+#heatmap.showing-3d-output #output-3d-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+#output-3d-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+#output-3d-legend i {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 3px solid #0877bd;
+}
+
+#output-3d-legend i.field {
+  border-top-color: #333;
+}
+
+#output-3d-legend i.train {
+  border-top-color: #0877bd;
+}
+
+#output-3d-legend i.test {
+  border-top-color: #f59322;
+}
+
 #heatmap .tick line {
   stroke: #ddd;
 }
@@ -490,7 +555,8 @@ g.column rect {
 }
 
 .data.column {
-  width: 10%;
+  flex: 0 0 180px;
+  width: 180px;
 }
 
 .data.column .dataset-list {
@@ -546,7 +612,25 @@ g.column rect {
 }
 
 #main-part .data.column p.slider {
-  margin: 0 -25px 20px;
+  margin: 0 0 14px;
+}
+
+#main-part .data.column input[type="text"],
+#main-part .data.column input[type="number"] {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 3px 0 8px;
+}
+
+#main-part .data.column .mdl-checkbox {
+  width: 100%;
+  min-height: 24px;
+  margin: 4px 0;
+}
+
+#main-part .data.column .mdl-checkbox__label.label {
+  white-space: normal;
+  line-height: 1.3em;
 }
 
 #main-part .basic-button {
@@ -587,7 +671,8 @@ g.column rect {
 /* Features column */
 
 .features.column {
-  width: 10%;
+  flex: 0 0 90px;
+  width: 90px;
   position: relative;
 }
 
@@ -743,7 +828,8 @@ g.column rect {
 /* Hidden layers column */
 
 .hidden-layers.column {
-  width: 40%;
+  flex: 1 1 auto;
+  min-width: 320px;
 }
 
 #main-part .hidden-layers h4 {
@@ -784,7 +870,8 @@ g.column rect {
 /* Output column */
 
 .output.column {
-  width: 275px;
+  flex: 0 0 320px;
+  width: 320px;
 }
 
 .metrics {
@@ -912,17 +999,20 @@ footer .links a:hover {
   display: -webkit-flex;
   display: flex;
   flex-wrap: wrap;
-  -webkit-justify-content: space-between;
-  justify-content: space-between;
+  gap: 6px 16px;
 }
 
 .hide-controls label.mdl-checkbox {
-  width: 145px;
-  height: 30px;
+  flex: 1 1 160px;
+  max-width: 220px;
+  min-height: 32px;
+  height: auto;
 }
 
 .hide-controls .mdl-checkbox__label {
   font-size: 13px;
+  white-space: normal;
+  line-height: 1.25em;
 }
 
 /* Material Overrides */
@@ -991,4 +1081,101 @@ footer .links a:hover {
 /* Keep grey focus circle for non-start values */
 #main-part .mdl-slider.is-upgraded:focus:not(:active)::-webkit-slider-thumb {
   box-shadow: 0 0 0 10px rgba(0,0,0, 0.12);
+}
+
+#projection-panel {
+  clear: both;
+  margin-top: 0;
+  margin-bottom: 36px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.projection-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+#projection-panel h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 400;
+  text-transform: uppercase;
+}
+
+.projection-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px 14px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.projection-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.projection-dimensions {
+  grid-column: span 2;
+}
+
+.projection-dimension-selects {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.projection-controls label {
+  color: #666;
+  font-size: 12px;
+  line-height: 1.25em;
+}
+
+.projection-controls select,
+.projection-controls input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+#random-walk-projection {
+  width: 100%;
+  height: 420px;
+  border: 1px solid #d6d6d6;
+  background: #fafafa;
+  box-sizing: border-box;
+}
+
+#random-walk-projection canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#projection-mode {
+  color: #555;
+  font-size: 12px;
+  text-align: right;
+}
+
+@media (max-width: 700px) {
+  .projection-dimensions {
+    grid-column: 1 / -1;
+  }
+}
+
+#sweep-results {
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+#sweep-heatmap {
+  display: block;
+  margin-top: 8px;
+  border: 1px solid #ddd;
+  background: #fafafa;
 }
