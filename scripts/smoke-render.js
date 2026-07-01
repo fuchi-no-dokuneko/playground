@@ -69,6 +69,8 @@ const url = process.env.PLAYGROUND_URL || "http://127.0.0.1:4173/";
       sweepCanvas: !!sweep,
       cnnToggle: !!document.querySelector("#useCnnFrontend"),
       transformerToggle: !!document.querySelector("#useTransformer"),
+      randomWalkDescription: (document.querySelector(
+        "#random-walk-description-title") || {}).textContent || "",
       lossTrainText: (document.querySelector("#loss-train") || {})
         .textContent || "",
       lossTestText: (document.querySelector("#loss-test") || {})
@@ -120,6 +122,8 @@ const url = process.env.PLAYGROUND_URL || "http://127.0.0.1:4173/";
     !/true walk line/.test(result.output3dLegend) ||
     !/node color:/.test(output3dHoverMode) ||
     !result.sweepCanvas ||
+    !/N-Dimensional Random-Walk Regression/.test(
+      result.randomWalkDescription) ||
     !toggleState.cnnCheckedBeforeTransformer ||
     toggleState.cnnAfterTransformer ||
     !toggleState.transformerChecked ||

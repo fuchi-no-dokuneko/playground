@@ -5,9 +5,15 @@ visualization, sweeps, and smoke checks run in the browser or local Node tools.
 
 ## Build Settings
 
+- Repository: `fuchi-no-dokuneko/playground`
+- Production branch: `master`
 - Build command: `npm run pages:build`
 - Output directory: `dist`
 - Wrangler output config: `pages_build_output_dir = "dist"`
+
+Cloudflare Pages can deploy this project because the build produces a static
+`index.html`, JavaScript, CSS, and browser assets in `dist`; the app does not
+require an application server.
 
 ## Local Verification
 
@@ -26,13 +32,22 @@ Firefox. It uses `FIREFOX_BINARY` when set, otherwise it uses the local
 Playwright Firefox binary installed at
 `/home/vmadmin/.cache/ms-playwright/firefox-1532/firefox/firefox`.
 
-## GitHub Fork Step
+## Git-integrated Deployment
 
-The local branch is `hyper0cube-random-walk`. The actual GitHub fork must be
-created by an authenticated GitHub user, then the local remote can be updated,
-for example:
+In Cloudflare, choose **Workers & Pages > Create application > Pages > Connect
+to Git**, select `fuchi-no-dokuneko/playground`, and use the build settings
+above. Pushes to `master` will then build and deploy automatically.
+
+## Direct Deployment
+
+Alternatively, authenticate Wrangler and deploy the built directory directly:
 
 ```bash
-git remote set-url origin https://github.com/<your-account>/playground.git
-git push -u origin hyper0cube-random-walk
+npm run pages:build
+npx wrangler login
+npm run pages:deploy
 ```
+
+Choose Git integration or Direct Upload when creating the Pages project;
+Cloudflare does not allow an existing project to switch freely between those
+project types later.

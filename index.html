@@ -451,6 +451,58 @@ limitations under the License.
   <!-- Article -->
 
   <article id="article-text">
+    <section class="l--body random-walk-description" aria-labelledby="random-walk-description-title">
+      <h2 id="random-walk-description-title">How Does N-Dimensional Random-Walk Regression Work?</h2>
+      <p>The random-walk mode trains a neural network to learn a vector-valued function <span class="mode-equation">f<sub>&theta;</sub>: &#8477;<sup>N</sup> &rarr; &#8477;<sup>N</sup></span>. Inputs come from sparse, randomly selected cells in an <var>N</var>-dimensional grid, and each selected cell is assigned one position from an <var>N</var>-dimensional random walk.</p>
+
+      <h3>1. Input regions</h3>
+      <p>The input domain <span class="mode-equation">[-1, 1]<sup>N</sup></span> is divided into <var>K</var> bins per dimension, producing <span class="mode-equation">K<sup>N</sup></span> possible hypercubic regions. The UI limits <var>K</var> so that <span class="mode-equation">K<sup>N</sup> &le; 10,000</span>. Only <var>K</var> regions are randomly selected.</p>
+      <p>For region index <var>r</var>, dimension <var>j</var> has grid coordinate</p>
+      <div class="mode-equation mode-equation--block">c<sub>j</sub> = floor(r / K<sup>j</sup>) mod K.</div>
+      <p>A coordinate is sampled uniformly inside that cell:</p>
+      <div class="mode-equation mode-equation--block">x<sub>j</sub> ~ U(-1 + 2c<sub>j</sub>/K, -1 + 2(c<sub>j</sub> + 1)/K).</div>
+      <p>Each selected region receives exactly <var>M</var> samples, so the complete dataset contains <span class="mode-equation">S = KM</span> examples.</p>
+
+      <h3>2. Target random walk</h3>
+      <p>The output walk starts at <span class="mode-equation">w<sub>0</sub> = (0, ..., 0)</span>. At each step, the generator chooses a dimension <var>J<sub>t</sub></var> and direction <span class="mode-equation">s<sub>t</sub> &isin; {-1, +1}</span>, then proposes</p>
+      <div class="mode-equation mode-equation--block">w<sub>t</sub> = w<sub>t-1</sub> + s<sub>t</sub>(2/K)e<sub>J<sub>t</sub></sub>.</div>
+      <p>Moves outside <span class="mode-equation">[-1, 1]<sup>N</sup></span> are rejected. There are <var>K</var> walk steps. The selected input regions are randomly permuted and assigned the unique targets <span class="mode-equation">w<sub>1</sub>, ..., w<sub>K</sub></span>. Therefore, nearby input regions do not necessarily receive nearby walk targets: the task is a sparse, piecewise-constant mapping <span class="mode-equation">x &isin; R<sub>r</sub> &rArr; y = w<sub>&pi;(r)</sub></span>.</p>
+
+      <h3>3. Optional Gaussian target noise</h3>
+      <p>When Gaussian noise is enabled, every output coordinate becomes</p>
+      <div class="mode-equation mode-equation--block">y&#771;<sub>j</sub> = y<sub>j</sub> + &epsilon;<sub>j</sub>, &nbsp; &epsilon;<sub>j</sub> ~ N(&mu;, &sigma;<sup>2</sup>).</div>
+      <p>The variance control is <span class="mode-equation">&sigma;<sup>2</sup></span>; the implementation scales a standard-normal sample by the square root of that value.</p>
+
+      <h3>4. Network and loss</h3>
+      <p>Without an architecture frontend, the network shape is <span class="mode-equation">N &rarr; h<sub>1</sub> &rarr; ... &rarr; h<sub>L</sub> &rarr; N</span>. Hidden layers use the selected activation and the output layer is linear:</p>
+      <div class="mode-equation mode-equation--block">z<sup>(&ell;)</sup> = W<sup>(&ell;)</sup>a<sup>(&ell;-1)</sup> + b<sup>(&ell;)</sup>, &nbsp; a<sup>(&ell;)</sup> = &phi;(z<sup>(&ell;)</sup>).</div>
+      <p>The displayed train and test loss averages half-squared error over samples and output dimensions:</p>
+      <div class="mode-equation mode-equation--block">L = (1/SN) &Sigma;<sub>i=1</sub><sup>S</sup> &Sigma;<sub>j=1</sub><sup>N</sup> &frac12;(&#375;<sub>ij</sub> - y<sub>ij</sub>)<sup>2</sup>.</div>
+      <p>The output derivative used by backpropagation is <span class="mode-equation">&part;L/&part;&#375;<sub>ij</sub> = &#375;<sub>ij</sub> - y<sub>ij</sub></span>, before the code's batch averaging.</p>
+
+      <h3>5. Optional fixed frontends</h3>
+      <p>The CNN frontend maps the input to eight deterministic width-two filter features:</p>
+      <div class="mode-equation mode-equation--block">&phi;<sub>f</sub>(x) = (1/P) &Sigma;<sub>p</sub>[b<sub>f</sub> + &Sigma;<sub>q</sub> &omega;<sub>fq</sub>x<sub>p+q</sub>].</div>
+      <p>The Transformer frontend embeds coordinates in 16 dimensions, applies four-head scaled dot-product attention, a residual ReLU transform, and mean pooling. Its attention weights have the usual form</p>
+      <div class="mode-equation mode-equation--block">&alpha;<sub>ij</sub> = softmax<sub>j</sub>(q<sub>i</sub><sup>T</sup>k<sub>j</sub> / &radic;4).</div>
+      <p>These frontend coefficients are deterministic sine-generated constants. They are feature transforms, not trainable CNN or Transformer parameters; only the following dense network learns.</p>
+
+      <h3>6. 3D output visualization</h3>
+      <p>For selected output dimensions <var>a</var>, <var>b</var>, and <var>c</var>, a vector <var>v</var> is projected using range <var>R</var>:</p>
+      <div class="mode-equation mode-equation--block">P(v) = (clip(v<sub>a</sub>/R), clip(v<sub>b</sub>/R), clip(v<sub>c</sub>/R)).</div>
+      <p>The black line connects the true walk <span class="mode-equation">P(w<sub>0</sub>), ..., P(w<sub>K</sub>)</span>. The prediction line evaluates the network at every selected region center, <span class="mode-equation">&#375;<sub>r</sub> = f<sub>&theta;</sub>(center(R<sub>r</sub>))</span>, and connects those predictions in walk order. Prediction color uses full mean squared error:</p>
+      <div class="mode-equation mode-equation--block">E<sub>r</sub> = (1/N) &Sigma;<sub>j=1</sub><sup>N</sup>(&#375;<sub>rj</sub> - y<sub>rj</sub>)<sup>2</sup>.</div>
+      <p>This color error is twice the half-squared loss displayed in the train and test metrics. Hovering a network node instead colors the true walk by that node's current activation at every region center.</p>
+
+      <h3>7. OOD MSE plane</h3>
+      <p>For every point <var>q</var> on the selected output-space slice, the plane displays</p>
+      <div class="mode-equation mode-equation--block">E<sub>plane</sub>(q) = min<sub>r</sub> (1/N)||&#375;<sub>r</sub> - q||<sub>2</sub><sup>2</sup>.</div>
+      <p>This measures distance from a hypothetical output point to the nearest predicted region-center output. It does not evaluate the network on out-of-distribution inputs and is not a direct ground-truth OOD error.</p>
+
+      <h3>8. Automated architecture sweeps</h3>
+      <p>The depth sweep tests 2, 4, 6, and 8 hidden layers at width 16. The width sweep tests 4, 8, 16, and 32 neurons at depth 4. Both use <span class="mode-equation">K &isin; {2, 3, 4, 5}</span> and train for the configured number of epochs. Data is shuffled into an 80/20 sample split, so samples from the same selected region can occur in both train and test sets.</p>
+    </section>
+
     <div class="l--body">
       <h2>Um, What Is a Neural Network?</h2>
       <p>It’s a technique for building a computer program that learns from data. It is based very loosely on how we think the human brain works. First, a collection of software “neurons” are created and connected together, allowing them to send messages to each other. Next, the network is asked to solve a problem, which it attempts to do over and over, each time strengthening the connections that lead to success and diminishing those that lead to failure. For a more detailed introduction to neural networks, Michael Nielsen’s <a href="http://neuralnetworksanddeeplearning.com/index.html">Neural Networks and Deep Learning</a> is a good place to start. For a more technical overview, try <a href="http://www.deeplearningbook.org/">Deep Learning</a> by Ian Goodfellow, Yoshua Bengio, and Aaron Courville.</p>

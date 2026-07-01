@@ -956,6 +956,30 @@ article p {
 
 }
 
+.random-walk-description {
+  padding-bottom: 28px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.random-walk-description h3 {
+  margin-top: 28px;
+}
+
+.mode-equation {
+  color: #333;
+  font-family: "Roboto Mono", "Courier New", monospace;
+}
+
+.mode-equation--block {
+  overflow-x: auto;
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border-left: 3px solid #0877bd;
+  background: #f5f7f8;
+  line-height: 1.6em;
+  white-space: nowrap;
+}
+
 /* Footer */
 
 footer {
