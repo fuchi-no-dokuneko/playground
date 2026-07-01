@@ -519,11 +519,11 @@ g.column rect {
 }
 
 #output-3d-legend i.train {
-  border-top-color: #0877bd;
+  border-top-color: #d1495b;
 }
 
 #output-3d-legend i.test {
-  border-top-color: #f59322;
+  border-top-color: #2a9d8f;
 }
 
 #heatmap .tick line {
@@ -1121,6 +1121,15 @@ footer .links a:hover {
   min-width: 0;
 }
 
+.projection-plane-toggle {
+  justify-content: center;
+}
+
+.projection-plane-toggle .mdl-checkbox {
+  width: auto;
+  min-height: 24px;
+}
+
 .projection-dimensions {
   grid-column: span 2;
 }
@@ -1154,6 +1163,15 @@ footer .links a:hover {
 #random-walk-projection canvas {
   width: 100% !important;
   height: 100% !important;
+}
+
+.projection-orbit-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.projection-orbit-canvas:active {
+  cursor: grabbing;
 }
 
 #projection-mode {

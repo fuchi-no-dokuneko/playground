@@ -116,7 +116,7 @@ const url = process.env.PLAYGROUND_URL || "http://127.0.0.1:4173/";
     result.output3dDataUrlLength < 1000 ||
     result.heatmap2dDisplay !== "none" ||
     !/Truth line: random walk/.test(result.output3dMode) ||
-    !/model line: network y/.test(result.output3dMode) ||
+    !/model line color: MSE/.test(result.output3dMode) ||
     !/true walk line/.test(result.output3dLegend) ||
     !/node color:/.test(output3dHoverMode) ||
     !result.sweepCanvas ||

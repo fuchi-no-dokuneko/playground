@@ -182,9 +182,9 @@ limitations under the License.
           </p>
         </div>
         <div class="ui-walkLengthK">
-          <label for="walkLengthK">K random-walk/grid regions:&nbsp;&nbsp;<span class="value">XX</span></label>
+          <label for="walkLengthK">K bins per dimension / walk steps:&nbsp;&nbsp;<span class="value">XX</span></label>
           <p class="slider">
-            <input class="mdl-slider mdl-js-slider" type="range" id="walkLengthK" min="2" max="80" step="1">
+            <input class="mdl-slider mdl-js-slider" type="range" id="walkLengthK" min="2" max="21" step="1">
           </p>
         </div>
         <div class="ui-sampleMultiplierM">
@@ -349,8 +349,8 @@ limitations under the License.
         <div id="output-3d-mode"></div>
         <div id="output-3d-legend">
           <span><i class="field"></i>true walk line</span>
-          <span><i class="train"></i>model line</span>
-          <span><i class="test"></i>hover colors</span>
+          <span><i class="train"></i>prediction MSE</span>
+          <span><i class="test"></i>low to high</span>
         </div>
       </div>
       <div style="float:left;margin-top:20px">
@@ -422,6 +422,20 @@ limitations under the License.
       <div class="projection-control">
         <label for="projectionScale">Zoom</label>
         <input type="range" id="projectionScale" min="0.5" max="2.5" step="0.05">
+      </div>
+      <div class="projection-control projection-plane-toggle">
+        <label class="mdl-checkbox mdl-js-checkbox mdl-js-ripple-effect" for="showOodPlane">
+          <input type="checkbox" id="showOodPlane" class="mdl-checkbox__input">
+          <span class="mdl-checkbox__label label">OOD MSE plane</span>
+        </label>
+      </div>
+      <div class="projection-control">
+        <label for="oodPlaneAxis">Slice axis</label>
+        <select id="oodPlaneAxis"></select>
+      </div>
+      <div class="projection-control">
+        <label for="oodPlaneOffset">Slice offset <span class="value" id="oodPlaneOffsetValue">0</span></label>
+        <input type="range" id="oodPlaneOffset" min="-1" max="1" step="0.05">
       </div>
     </div>
     <div id="random-walk-projection"></div>

@@ -203,24 +203,36 @@ interface ProjectionViewState {
   points: any;
   dynamicObjects: any[];
   webglFailed: boolean;
+  controlsAttached: boolean;
+}
+interface OodPlanePayload {
+  positions: number[];
+  colors: number[];
+  indices: number[];
+  maxError: number;
 }
 interface ProjectionPayload {
   positions: number[];
   colors: number[];
   mode: string;
   range: number;
+  oodPlane: OodPlanePayload;
 }
 interface Heatmap3DPayload {
   truthLinePositions: number[];
   truthLineColors: number[];
   modelLinePositions: number[];
   modelLineColors: number[];
+  oodPlane: OodPlanePayload;
   mode: string;
   axes: string;
   range: number;
   lineScale: number;
+  maxError: number;
 }
 let projectionViews: {[name: string]: ProjectionViewState} = {};
+const MAX_RANDOM_WALK_REGIONS = 10000;
+const OOD_PLANE_RESOLUTION = 22;
 
 function usingRandomWalk(): boolean {
   return state.problem === Problem.REGRESSION &&
@@ -243,6 +255,25 @@ function getFrontendOutputSize(rawInputSize: number): number {
 
 function getTarget(point: Example2D): number | number[] {
   return point.labelVec != null ? point.labelVec : point.label;
+}
+
+function getMaxRandomWalkK(dimension = state.dimensionN): number {
+  let safeDimension = Math.max(1, Math.floor(dimension));
+  return Math.max(2, Math.floor(Math.pow(MAX_RANDOM_WALK_REGIONS,
+      1 / safeDimension)));
+}
+
+function clampRandomWalkK(value: number, dimension = state.dimensionN): number {
+  return Math.max(2, Math.min(getMaxRandomWalkK(dimension),
+      Math.floor(value)));
+}
+
+function normalizeRandomWalkControls() {
+  state.dimensionN = Math.max(1, Math.min(8, Math.floor(state.dimensionN)));
+  state.walkLengthK = clampRandomWalkK(state.walkLengthK);
+  let maxK = getMaxRandomWalkK();
+  d3.select("#walkLengthK").attr("max", maxK);
+  d3.select("label[for='walkLengthK'] .value").text(state.walkLengthK);
 }
 
 function makeGUI() {
@@ -399,17 +430,24 @@ function makeGUI() {
   d3.select("label[for='noise'] .value").text(state.noise);
 
   let dimensionN = d3.select("#dimensionN").on("input", function() {
-    state.dimensionN = Math.max(1, Math.min(8, +this.value));
+    state.dimensionN = Math.max(1, Math.min(8, Math.floor(+this.value)));
+    state.walkLengthK = clampRandomWalkK(state.walkLengthK);
+    d3.select("#walkLengthK")
+        .attr("max", getMaxRandomWalkK())
+        .property("value", state.walkLengthK);
     d3.select("label[for='dimensionN'] .value").text(state.dimensionN);
+    d3.select("label[for='walkLengthK'] .value").text(state.walkLengthK);
     generateData(true);
     parametersChanged = true;
     reset();
   });
+  normalizeRandomWalkControls();
   dimensionN.property("value", state.dimensionN);
   d3.select("label[for='dimensionN'] .value").text(state.dimensionN);
 
   let walkLengthK = d3.select("#walkLengthK").on("input", function() {
-    state.walkLengthK = Math.max(1, Math.floor(+this.value));
+    state.walkLengthK = clampRandomWalkK(+this.value);
+    d3.select(this).property("value", state.walkLengthK);
     d3.select("label[for='walkLengthK'] .value").text(state.walkLengthK);
     generateData(true);
     parametersChanged = true;
@@ -510,6 +548,7 @@ function makeGUI() {
   ["projectionX", "projectionY", "projectionZ"].forEach(prop => {
     d3.select("#" + prop).on("change", function() {
       state[prop] = +this.value;
+      updateProjectionControls();
       state.serialize();
       drawRandomWalkProjection();
     });
@@ -529,6 +568,28 @@ function makeGUI() {
     control.property("value", state[prop]);
   });
   d3.select("#projectionRangeValue").text(state.projectionRange);
+
+  let showOodPlane = d3.select("#showOodPlane").on("change", function() {
+    state.showOodPlane = this.checked;
+    state.serialize();
+    drawRandomWalkProjection();
+  });
+  showOodPlane.property("checked", state.showOodPlane);
+
+  d3.select("#oodPlaneAxis").on("change", function() {
+    state.oodPlaneAxis = Math.max(0, Math.min(2, +this.value));
+    state.serialize();
+    drawRandomWalkProjection();
+  });
+
+  let oodPlaneOffset = d3.select("#oodPlaneOffset").on("input", function() {
+    state.oodPlaneOffset = Math.max(-1, Math.min(1, +this.value));
+    d3.select("#oodPlaneOffsetValue").text(state.oodPlaneOffset.toFixed(2));
+    state.serialize();
+    drawRandomWalkProjection();
+  });
+  oodPlaneOffset.property("value", state.oodPlaneOffset);
+  d3.select("#oodPlaneOffsetValue").text(state.oodPlaneOffset.toFixed(2));
 
   let batchSize = d3.select("#batchSize").on("input", function() {
     state.batchSize = this.value;
@@ -1159,6 +1220,18 @@ function updateProjectionControls() {
     }
     select.property("value", state[prop]);
   });
+  let planeAxis = d3.select("#oodPlaneAxis");
+  if (planeAxis.size()) {
+    let labels = getProjectionAxisLabels();
+    let options = planeAxis.selectAll("option").data([0, 1, 2]);
+    options.enter().append("option");
+    options.attr("value", (d: number) => d)
+        .text((d: number) => labels[d] + " fixed");
+    options.exit().remove();
+    state.oodPlaneAxis = Math.max(0, Math.min(2,
+        Math.floor(state.oodPlaneAxis)));
+    planeAxis.property("value", state.oodPlaneAxis);
+  }
 }
 
 function drawRandomWalkProjection() {
@@ -1168,10 +1241,12 @@ function drawRandomWalkProjection() {
   if (!usingRandomWalk()) {
     return;
   }
-  drawProjectionView("large", "#random-walk-projection", "#projection-mode",
-      false);
-  drawProjectionView("output", "#output-3d-projection", "#output-3d-mode",
-      true);
+  let largeContainer = document.querySelector("#random-walk-projection") as
+      HTMLDivElement;
+  let outputContainer = document.querySelector("#output-3d-projection") as
+      HTMLDivElement;
+  drawOutputHeatmap3D("large", largeContainer, "#projection-mode", true);
+  drawOutputHeatmap3D("output", outputContainer, "#output-3d-mode", false);
 }
 
 function updateOutputProjectionVisibility() {
@@ -1198,6 +1273,8 @@ function drawProjectionView(name: string, containerSelector: string,
   let payload = buildRandomWalkProjectionPayload(useNetworkOutput);
   d3.select(modeSelector).text("Color: " + payload.mode +
       " | axes: " + getProjectionAxisLabels().join("/") +
+      " | OOD plane: " + (payload.oodPlane == null ? "off" :
+          ("MSE max " + payload.oodPlane.maxError.toFixed(3))) +
       " | View: [-" + payload.range + ", " + payload.range + "]");
   ensureProjectionScene(name, container);
   let view = projectionViews[name];
@@ -1206,6 +1283,10 @@ function drawProjectionView(name: string, containerSelector: string,
     return;
   }
   clearProjectionDynamicObjects(view);
+  if (payload.oodPlane != null) {
+    addProjectionObject(view, createColoredSurface(payload.oodPlane.positions,
+        payload.oodPlane.colors, payload.oodPlane.indices, 0.38));
+  }
   view.points = createPointCloud(payload.positions, payload.colors, 0.045,
       0.88);
   addProjectionObject(view, view.points);
@@ -1213,11 +1294,18 @@ function drawProjectionView(name: string, containerSelector: string,
 }
 
 function drawOutputHeatmap3D(name: string, container: HTMLDivElement,
-    modeSelector: string) {
-  let payload = buildOutputHeatmap3DPayload();
-  d3.select(modeSelector).text("Truth line: random walk | " + payload.mode +
+    modeSelector: string, showPlane = false) {
+  if (container == null) {
+    return;
+  }
+  let payload = buildOutputHeatmap3DPayload(showPlane);
+  d3.select(modeSelector).text("Output space | Truth line: random walk | " +
+      payload.mode +
       " | axes: " + payload.axes +
       " | line scale x" + payload.lineScale.toFixed(1) +
+      (payload.oodPlane == null ? "" :
+          (" | OOD plane MSE max " + payload.oodPlane.maxError.toFixed(3))) +
+      " | MSE max " + payload.maxError.toFixed(3) +
       " | View: [-" + payload.range + ", " + payload.range + "]");
   ensureProjectionScene(name, container);
   let view = projectionViews[name];
@@ -1227,11 +1315,16 @@ function drawOutputHeatmap3D(name: string, container: HTMLDivElement,
     return;
   }
   clearProjectionDynamicObjects(view);
+  let largeView = name === "large";
+  if (payload.oodPlane != null) {
+    addProjectionObject(view, createColoredSurface(payload.oodPlane.positions,
+        payload.oodPlane.colors, payload.oodPlane.indices, 0.42));
+  }
   addProjectionObject(view, createSegmentedLine(payload.truthLinePositions,
-      payload.truthLineColors, 0.013, 0.96));
+      payload.truthLineColors, largeView ? 0.018 : 0.013, 0.96));
   if (payload.modelLinePositions.length >= 6) {
     addProjectionObject(view, createSegmentedLine(payload.modelLinePositions,
-        payload.modelLineColors, 0.009, 0.78));
+        payload.modelLineColors, largeView ? 0.014 : 0.009, 0.82));
   }
   renderProjectionView(name);
 }
@@ -1256,15 +1349,18 @@ function buildRandomWalkProjectionPayload(useNetworkOutput: boolean):
     let color = d3.rgb(colorScale(value) as any);
     colors.push(color.r / 255, color.g / 255, color.b / 255);
   });
-  return {positions, colors, mode, range};
+  return {positions, colors, mode, range, oodPlane: null};
 }
 
-function buildOutputHeatmap3DPayload(): Heatmap3DPayload {
+function buildOutputHeatmap3DPayload(includePlane = false): Heatmap3DPayload {
   let axes = getProjectionAxes();
   let range = getProjectionRange();
   let orderedRegions = getRegionsByWalkStep();
   let truthVectors = randomWalkPath.length > 0 ? randomWalkPath :
       orderedRegions.map(region => region.targetVec);
+  if (truthVectors.length > 0) {
+    truthVectors = [zeroVector(getOutputDimension())].concat(truthVectors);
+  }
   let truthLinePositions: number[] = [];
   let truthValues: number[] = [];
   truthVectors.forEach(vector => {
@@ -1273,35 +1369,53 @@ function buildOutputHeatmap3DPayload(): Heatmap3DPayload {
   });
   let modelLinePositions: number[] = [];
   let modelValues: number[] = [];
+  let modelVectors: number[][] = [];
   let mode = selectedNodeId != null ? "node color: " + selectedNodeId :
-      "model line: network y";
+      "model line color: MSE";
   orderedRegions.forEach(region => {
     let point = exampleFromRegion(region);
     if (selectedNodeId == null) {
       let output = getModelOutputVector(point);
+      modelVectors.push(output.slice());
       addPosition(modelLinePositions, output, axes, range);
-      modelValues.push(output[0] || 0);
+      modelValues.push(getVectorMse(output, region.targetVec));
     } else {
       addPosition(modelLinePositions, region.targetVec, axes, range);
       modelValues.push(getNodeProjectionValue(point, selectedNodeId));
     }
   });
-  let valueScale = makeRandomWalkValueColorScale(truthValues.concat(
-      modelValues));
+  let errorScale = selectedNodeId == null ?
+      makeMseColorScale(modelValues) :
+      makeRandomWalkValueColorScale(truthValues.concat(modelValues));
   let lineScale = getOutputLineDisplayScale(truthLinePositions.concat(
       modelLinePositions));
+  let oodPlane = includePlane && selectedNodeId == null ?
+      buildOutputSpaceOodPlanePayload(range, modelVectors) : null;
   scalePositions(truthLinePositions, lineScale);
   scalePositions(modelLinePositions, lineScale);
+  if (oodPlane != null) {
+    scalePositions(oodPlane.positions, lineScale);
+  }
   return {
     truthLinePositions,
-    truthLineColors: valuesToColors(truthValues, valueScale),
+    truthLineColors: solidColors(truthVectors.length, "#222222"),
     modelLinePositions,
-    modelLineColors: valuesToColors(modelValues, valueScale),
+    modelLineColors: valuesToColors(modelValues, errorScale),
+    oodPlane,
     mode,
     axes: getProjectionAxisLabels().join("/"),
     range,
-    lineScale
+    lineScale,
+    maxError: maxFinite(modelValues)
   };
+}
+
+function zeroVector(length: number): number[] {
+  let result = new Array(length);
+  for (let i = 0; i < length; i++) {
+    result[i] = 0;
+  }
+  return result;
 }
 
 function getOutputLineDisplayScale(positions: number[]): number {
@@ -1350,6 +1464,33 @@ function valuesToColors(values: number[], scale): number[] {
   return colors;
 }
 
+function solidColors(count: number, colorValue: string): number[] {
+  let colors: number[] = [];
+  let color = d3.rgb(colorValue as any);
+  for (let i = 0; i < count; i++) {
+    colors.push(color.r / 255, color.g / 255, color.b / 255);
+  }
+  return colors;
+}
+
+function makeMseColorScale(values: number[]) {
+  let maxError = Math.max(maxFinite(values), 1e-6);
+  return d3.scale.linear<string, number>()
+      .domain([0, maxError * 0.5, maxError])
+      .range(["#2a9d8f", "#f4d35e", "#d1495b"])
+      .clamp(true);
+}
+
+function maxFinite(values: number[]): number {
+  let result = 0;
+  values.forEach(value => {
+    if (isFinite(value)) {
+      result = Math.max(result, value);
+    }
+  });
+  return result;
+}
+
 function makeRandomWalkValueColorScale(values: number[]) {
   let maxAbs = 0;
   values.forEach(value => {
@@ -1362,6 +1503,76 @@ function makeRandomWalkValueColorScale(values: number[]) {
       .domain([-maxAbs, 0, maxAbs])
       .range(["#f59322", "#e8eaeb", "#0877bd"])
       .clamp(true);
+}
+
+function buildOutputSpaceOodPlanePayload(range: number,
+    modelVectors: number[][]): OodPlanePayload {
+  if (!state.showOodPlane || modelVectors.length === 0) {
+    return null;
+  }
+  let axes = getProjectionAxes();
+  let fixedAxis = Math.max(0, Math.min(2, Math.floor(state.oodPlaneAxis)));
+  let freeAxes: number[] = [];
+  for (let axis = 0; axis < 3; axis++) {
+    if (axis !== fixedAxis) {
+      freeAxes.push(axis);
+    }
+  }
+  let offset = Math.max(-1, Math.min(1, +state.oodPlaneOffset || 0));
+  let positions: number[] = [];
+  let errors: number[] = [];
+  let indices: number[] = [];
+  let resolution = OOD_PLANE_RESOLUTION;
+  for (let row = 0; row <= resolution; row++) {
+    let v = -1 + 2 * row / resolution;
+    for (let col = 0; col <= resolution; col++) {
+      let u = -1 + 2 * col / resolution;
+      let projected = [0, 0, 0];
+      projected[fixedAxis] = offset;
+      projected[freeAxes[0]] = u;
+      projected[freeAxes[1]] = v;
+      positions.push(projected[0], projected[1], projected[2]);
+      let targetOutput = zeroVector(getOutputDimension());
+      targetOutput[axes[0]] = projected[0] * range;
+      targetOutput[axes[1]] = projected[1] * range;
+      targetOutput[axes[2]] = projected[2] * range;
+      errors.push(getNearestPredictionMse(targetOutput, modelVectors));
+    }
+  }
+  for (let row = 0; row < resolution; row++) {
+    for (let col = 0; col < resolution; col++) {
+      let a = row * (resolution + 1) + col;
+      let b = a + 1;
+      let c = a + resolution + 1;
+      let d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  return {
+    positions,
+    colors: valuesToColors(errors, makeMseColorScale(errors)),
+    indices,
+    maxError: maxFinite(errors)
+  };
+}
+
+function getNearestPredictionMse(targetOutput: number[],
+    modelVectors: number[][]): number {
+  let bestError = Infinity;
+  modelVectors.forEach(output => {
+    bestError = Math.min(bestError, getVectorMse(output, targetOutput));
+  });
+  return isFinite(bestError) ? bestError : 0;
+}
+
+function getVectorMse(output: number[], target: number[]): number {
+  let length = Math.max(1, Math.min(output.length, target.length));
+  let error = 0;
+  for (let i = 0; i < length; i++) {
+    let diff = (output[i] || 0) - (target[i] || 0);
+    error += diff * diff;
+  }
+  return error / length;
 }
 
 function getGroundTruthValue(point: Example2D): number {
@@ -1410,7 +1621,24 @@ function createPointCloud(positions: number[], colors: number[], size: number,
     size,
     vertexColors: true,
     transparent: true,
-    opacity
+      opacity
+  }));
+}
+
+function createColoredSurface(positions: number[], colors: number[],
+    indices: number[], opacity: number): any {
+  let geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(
+      positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+    side: THREE.DoubleSide,
+    vertexColors: true,
+    transparent: true,
+    opacity,
+    depthWrite: false
   }));
 }
 
@@ -1511,9 +1739,91 @@ function ensureProjectionScene(name: string, container: HTMLDivElement) {
     view.root = new THREE.Group();
     view.scene.add(view.root);
     view.root.add(new THREE.AxesHelper(name === "output" ? 1.05 : 1.15));
+    attachProjectionMouseControls(name, view.renderer.domElement);
   } catch (e) {
     view.webglFailed = true;
     view.renderer = null;
+  }
+}
+
+function attachProjectionMouseControls(name: string, canvas: HTMLCanvasElement) {
+  let view = getProjectionView(name);
+  if (view.controlsAttached) {
+    return;
+  }
+  view.controlsAttached = true;
+  canvas.className += " projection-orbit-canvas";
+  canvas.setAttribute("title",
+      "Drag to orbit. Ctrl/Alt-drag rolls. Wheel zooms all 3D views.");
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+  canvas.addEventListener("mousedown", event => {
+    dragging = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    event.preventDefault();
+  });
+  window.addEventListener("mousemove", event => {
+    if (!dragging) {
+      return;
+    }
+    let dx = event.clientX - lastX;
+    let dy = event.clientY - lastY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    if (event.ctrlKey || event.altKey) {
+      state.projectionRotateZ = normalizeAngle(state.projectionRotateZ +
+          dx * 0.45);
+      state.projectionRotateX = normalizeAngle(state.projectionRotateX +
+          dy * 0.2);
+    } else {
+      state.projectionRotateY = normalizeAngle(state.projectionRotateY +
+          dx * 0.45);
+      state.projectionRotateX = normalizeAngle(state.projectionRotateX +
+          dy * 0.45);
+    }
+    syncProjectionControlValues();
+    renderAllProjectionViews();
+    event.preventDefault();
+  });
+  window.addEventListener("mouseup", () => {
+    if (dragging) {
+      dragging = false;
+      state.serialize();
+    }
+  });
+  canvas.addEventListener("wheel", event => {
+    let nextScale = state.projectionScale *
+        Math.exp(-event.deltaY * 0.0012);
+    state.projectionScale = Math.max(0.5, Math.min(2.5, nextScale));
+    syncProjectionControlValues();
+    renderAllProjectionViews();
+    state.serialize();
+    event.preventDefault();
+  });
+}
+
+function normalizeAngle(value: number): number {
+  while (value > 180) {
+    value -= 360;
+  }
+  while (value < -180) {
+    value += 360;
+  }
+  return value;
+}
+
+function syncProjectionControlValues() {
+  ["projectionRotateX", "projectionRotateY", "projectionRotateZ",
+      "projectionScale"].forEach(prop => {
+    d3.select("#" + prop).property("value", state[prop]);
+  });
+}
+
+function renderAllProjectionViews() {
+  for (let name in projectionViews) {
+    renderProjectionView(name);
   }
 }
 
@@ -1526,7 +1836,8 @@ function getProjectionView(name: string): ProjectionViewState {
       root: null,
       points: null,
       dynamicObjects: [],
-      webglFailed: false
+      webglFailed: false,
+      controlsAttached: false
     };
   }
   return projectionViews[name];
@@ -1670,12 +1981,12 @@ function runAutoSweep(kind: string) {
   d3.select("#sweep-status").text("Running " + kind + " sweep...");
   let originalK = state.walkLengthK;
   let originalSeed = state.seed;
-  let ks = [5, 10, 20, 40];
+  let ks = [2, 3, 4, 5].filter(k => k <= getMaxRandomWalkK());
   let tbody = d3.select("#sweep-results tbody");
   tbody.selectAll("tr").remove();
   let results: any[] = [];
   ks.forEach(k => {
-    state.walkLengthK = k;
+    state.walkLengthK = clampRandomWalkK(k);
     Math.seedrandom(originalSeed);
     let data = randomWalkRegressionData({
       dimension: state.dimensionN,

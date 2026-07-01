@@ -198,7 +198,7 @@ function waitForPort(port, host = "127.0.0.1", timeoutMs = 15000) {
         result.output3dDataUrlLength < 1000 ||
         result.heatmap2dDisplay !== "none" ||
         !/Truth line: random walk/.test(result.output3dMode) ||
-        !/model line: network y/.test(result.output3dMode) ||
+        !/model line color: MSE/.test(result.output3dMode) ||
         !/true walk line/.test(result.output3dLegend) ||
         !result.hashHasSeed ||
         !/L1:/.test(result.deadNeuronStats) ||
@@ -208,7 +208,7 @@ function waitForPort(port, host = "127.0.0.1", timeoutMs = 15000) {
     }
 
     await driver.get(withAuditHash(url, "one-neuron", "#problem=regression&regressionDatasetKind=1" +
-      "&dimensionN=3&walkLengthK=40&sampleMultiplierM=1&networkShape=1" +
+      "&dimensionN=3&walkLengthK=20&sampleMultiplierM=1&networkShape=1" +
       "&seed=one-neuron-loss-audit"));
     await waitForAppReady(driver, "one-neuron loss audit");
     const auditState = await driver.executeScript(() => {
@@ -219,7 +219,7 @@ function waitForPort(port, host = "127.0.0.1", timeoutMs = 15000) {
         hash: location.hash
       };
     });
-    assert(auditState.dimensionN === "3" && auditState.walkLengthK === "40" &&
+    assert(auditState.dimensionN === "3" && auditState.walkLengthK === "20" &&
       auditState.sampleMultiplierM === "1" &&
       auditState.hash.indexOf("networkShape=1") !== -1,
       "One-neuron audit did not load the requested state: " +

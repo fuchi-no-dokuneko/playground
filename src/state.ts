@@ -134,6 +134,9 @@ export class State {
     {name: "projectionRotateZ", type: Type.NUMBER},
     {name: "projectionScale", type: Type.NUMBER},
     {name: "projectionRange", type: Type.NUMBER},
+    {name: "showOodPlane", type: Type.BOOLEAN},
+    {name: "oodPlaneAxis", type: Type.NUMBER},
+    {name: "oodPlaneOffset", type: Type.NUMBER},
     {name: "useCnnFrontend", type: Type.BOOLEAN},
     {name: "useTransformer", type: Type.BOOLEAN},
     {name: "networkShape", type: Type.ARRAY_NUMBER},
@@ -179,6 +182,9 @@ export class State {
   projectionRotateZ = 0;
   projectionScale = 1;
   projectionRange = 1;
+  showOodPlane = true;
+  oodPlaneAxis = 2;
+  oodPlaneOffset = 0;
   useCnnFrontend = false;
   useTransformer = false;
   batchSize = 10;
