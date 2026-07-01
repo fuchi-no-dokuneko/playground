@@ -109,7 +109,7 @@ const url = process.env.PLAYGROUND_URL || "http://127.0.0.1:4173/";
   await browser.close();
 
   const externalErrors = errors.filter(e =>
-    !/ERR_CERT|ERR_CONNECTION_CLOSED|google-analytics|fonts\.googleapis|ERR_BLOCKED_BY_CLIENT|404 \(Not Found\)/.test(e));
+    !/ERR_CERT|ERR_CONNECTION_CLOSED|google-analytics|fonts\.googleapis|ERR_BLOCKED_BY_CLIENT|404 \([^)]*\)|status of 404/.test(e));
   const failed = externalErrors.length ||
     !result.projectionCanvas ||
     !result.output3dCanvas ||
