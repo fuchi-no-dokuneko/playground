@@ -17,7 +17,10 @@ For a fast edit-refresh cycle when developing run `npm run serve-watch`.
 This will start an http server and automatically re-compile the TypeScript,
 HTML and CSS files whenever they change.
 
-## For owners
-To push to production: `git subtree push --prefix dist origin gh-pages`.
+## Deployment
+
+Pushes to `master` run the build and browser smoke test, then deploy the same
+`dist` artifact to GitHub Pages and Cloudflare Pages. See
+[CLOUDFLARE_PAGES.md](CLOUDFLARE_PAGES.md) for setup details.
 
 This is not an official Google product.

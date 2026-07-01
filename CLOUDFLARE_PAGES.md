@@ -10,6 +10,7 @@ visualization, sweeps, and smoke checks run in the browser or local Node tools.
 - Build command: `npm run pages:build`
 - Output directory: `dist`
 - Wrangler output config: `pages_build_output_dir = "dist"`
+- Cloudflare project: `tensor-playground-research`
 
 Cloudflare Pages can deploy this project because the build produces a static
 `index.html`, JavaScript, CSS, and browser assets in `dist`; the app does not
@@ -32,11 +33,19 @@ Firefox. It uses `FIREFOX_BINARY` when set, otherwise it uses the local
 Playwright Firefox binary installed at
 `/home/vmadmin/.cache/ms-playwright/firefox-1532/firefox/firefox`.
 
-## Git-integrated Deployment
+## Automated Deployment
 
-In Cloudflare, choose **Workers & Pages > Create application > Pages > Connect
-to Git**, select `fuchi-no-dokuneko/playground`, and use the build settings
-above. Pushes to `master` will then build and deploy automatically.
+The `Build and deploy pages` GitHub Actions workflow builds and smoke-tests each
+push and pull request. Pushes to `master` deploy the validated `dist` artifact
+to both hosting providers.
+
+GitHub Pages uses GitHub Actions directly and does not require a repository
+secret. Cloudflare deployment requires these GitHub repository secrets:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+The token must be able to edit Cloudflare Pages projects for the account.
 
 ## Direct Deployment
 
@@ -48,6 +57,5 @@ npx wrangler login
 npm run pages:deploy
 ```
 
-Choose Git integration or Direct Upload when creating the Pages project;
-Cloudflare does not allow an existing project to switch freely between those
-project types later.
+The workflow and direct command both deploy to the
+`tensor-playground-research` Pages project.
