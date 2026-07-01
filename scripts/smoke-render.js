@@ -88,14 +88,14 @@ const url = process.env.PLAYGROUND_URL || "http://127.0.0.1:4173/";
   const output3dHoverMode = await page.$eval("#output-3d-mode",
     el => el.textContent.trim());
 
-  await page.check("#useCnnFrontend");
+  await page.$eval("#useCnnFrontend", input => input.click());
   await page.waitForFunction(() =>
     document.querySelectorAll("#svg g.node").length >= 8,
     null,
     { timeout: 15000 });
   const cnnChecked = await page.isChecked("#useCnnFrontend");
 
-  await page.check("#useTransformer");
+  await page.$eval("#useTransformer", input => input.click());
   await page.waitForFunction(() =>
     document.querySelectorAll("#svg g.node").length >= 16,
     null,
