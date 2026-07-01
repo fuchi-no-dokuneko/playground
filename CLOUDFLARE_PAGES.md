@@ -40,7 +40,9 @@ push and pull request. Pushes to `master` deploy the validated `dist` artifact
 to both hosting providers.
 
 GitHub Pages uses GitHub Actions directly and does not require a repository
-secret. Cloudflare deployment requires these GitHub repository secrets:
+secret. Before the first deployment, enable it under **Settings > Pages** and
+select **GitHub Actions** as the source. Cloudflare deployment requires these
+GitHub repository secrets:
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
